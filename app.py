@@ -375,3 +375,11 @@ elif choice == "📓 复盘日记":
         with st.chat_message("user"): # 借用对话框样式作为卡片
             st.write(f"**{r['date']} | {r['stock_name']}**")
             st.write(r['content'])
+# —— 手动下载最新数据库 ——
+import pathlib
+db_path = pathlib.Path(__file__).with_name("stock_data_v12.db")
+if db_path.exists():
+    with open(db_path, "rb") as f:
+        st.download_button("📥 下载最新数据", f,
+                          file_name="stock_data_v12.db",
+                          mime="application/x-sqlite3")
