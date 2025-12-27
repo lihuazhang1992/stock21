@@ -375,15 +375,16 @@ elif choice == "📓 复盘日记":
         with st.chat_message("user"): # 借用对话框样式作为卡片
             st.write(f"**{r['date']} | {r['stock_name']}**")
             st.write(r['content'])
-# ========== 手动下载最新数据库 ==========
-with st.sidebar:
-    st.markdown("---")
+# ========== 万能下载按钮 ==========
+col1, col2, col3 = st.columns([5, 1, 1])
+with col3:
     db_path = pathlib.Path(__file__).with_name("stock_data_v12.db")
     if db_path.exists():
         with open(db_path, "rb") as f:
             st.download_button(
-                label="📥 下载最新数据库",
+                label="📥",
                 data=f,
                 file_name="stock_data_v12.db",
-                mime="application/x-sqlite3"
+                mime="application/x-sqlite3",
+                help="下载最新数据库"
             )
