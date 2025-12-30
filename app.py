@@ -325,37 +325,66 @@ elif choice == "🔔 买卖信号":
 
 elif choice == "📜 历史明细":
     st.header("📜 历史交易流水")
-    df_h = pd.read_sql("SELECT * FROM trades ORDER BY date DESC, id DESC", conn)
-    if not df_h.empty:
-        search_code = st.text_input("🔍 搜索股票代码")
+    
+    # 读取完整数据，并将 date 列转换为 datetime.date 类型
+    df_full = pd.read_sql("SELECT id, date, code, action, price, quantity, note FROM trades ORDER BY date DESC, id DESC", conn)
+    
+    if df_full.empty:
+        st.info("暂无交易记录")
+    else:
+        # 关键修复：将字符串日期转换为 date 对象
+        df_full['date'] = pd.to_datetime(df_full['date']).dt.date
+        
+        # 显示部分：支持搜索筛选（仅影响显示）
+        search_code = st.text_input("🔍 搜索股票代码（仅影响显示，不影响编辑）")
+        df_display = df_full.copy()
         if search_code:
-            df_h = df_h[df_h['code'].str.contains(search_code, case=False)]
-       
+            df_display = df_display[df_display['code'].str.contains(search_code, case=False, na=False)]
+        
+        # 美化显示筛选结果
         html = '<table class="custom-table"><thead><tr><th>日期</th><th>代码</th><th>操作</th><th>价格</th><th>数量</th><th>总额</th><th>备注</th></tr></thead><tbody>'
-        for _, r in df_h.iterrows():
+        for _, r in df_display.iterrows():
             tag = f'<span class="profit-red">{r["action"]}</span>' if r["action"] == "买入" else f'<span class="loss-green">{r["action"]}</span>'
             note_display = r['note'] if pd.notna(r['note']) and str(r['note']).strip() else '<small style="color:#888;">无备注</small>'
             html += f"<tr><td>{r['date']}</td><td>{r['code']}</td><td>{tag}</td><td>{r['price']:.3f}</td><td>{int(r['quantity'])}</td><td>{r['price']*r['quantity']:,.2f}</td><td>{note_display}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
-       
-        with st.expander("🛠️ 数据库维护（可编辑所有字段）"):
-            ed_df = st.data_editor(
-                df_h,
+        
+        st.warning("⚠️ 注意：下方编辑器操作的是**全部交易记录**（不受上方搜索影响），支持增删改，请谨慎操作！")
+        
+        # 编辑部分：使用转换后的 df_full（date 为 date 类型）
+        with st.expander("🛠️ 数据库维护（编辑全部交易记录，支持增、删、改）", expanded=False):
+            edited_df = st.data_editor(
+                df_full,
                 use_container_width=True,
                 num_rows="dynamic",
-                hide_index=True,
+                hide_index=False,
                 column_config={
-                    "id": None,
-                    "note": st.column_config.TextColumn("备注", width="medium")
-                }
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "date": st.column_config.DateColumn("日期", format="YYYY-MM-DD", required=True),
+                    "code": st.column_config.TextColumn("代码", required=True),
+                    "action": st.column_config.SelectboxColumn("操作", options=["买入", "卖出"], required=True),
+                    "price": st.column_config.NumberColumn("价格", min_value=0.0, format="%.3f", required=True),
+                    "quantity": st.column_config.NumberColumn("数量", min_value=1, step=1, required=True),
+                    "note": st.column_config.TextColumn("备注", width="large"),
+                },
+                key="trades_editor"
             )
-            if st.button("💾 提交修改并刷新"):
-                ed_df.to_sql('trades', conn, if_exists='replace', index=False)
-                conn.commit()
-                st.success("数据库已更新")
-                st.rerun()
-    else:
-        st.info("暂无交易记录")
+            
+            col_save, col_cancel = st.columns([1, 4])
+            with col_save:
+                if st.button("💾 提交所有修改", type="primary"):
+                    try:
+                        # 保存前：将 date 列转回字符串格式，适配数据库 TEXT 类型
+                        save_df = edited_df.copy()
+                        save_df['date'] = pd.to_datetime(save_df['date']).dt.strftime('%Y-%m-%d')
+                        
+                        # 替换整个表（现在是完整数据，安全）
+                        save_df.to_sql('trades', conn, if_exists='replace', index=False)
+                        conn.commit()
+                        st.success("所有交易记录已成功更新！")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"保存失败：{e}")
 
 elif choice == "📓 复盘日记":
     st.header("📓 每日复盘")
