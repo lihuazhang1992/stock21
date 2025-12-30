@@ -140,16 +140,56 @@ if choice == "📊 实时持仓":
         else:
             st.info("目前没有持仓。")
 
-        # --- 渲染 2：活跃单 ---
+        # --- 渲染 2：多笔未平仓活跃单 ---
         st.write("---")
         st.subheader("2️⃣ 多笔未平仓活跃单 (原始成交价追踪)")
-        if all_active_records:
-            all_active_records.sort(key=lambda x: x['gain_val'], reverse=True)
+        
+        # 新增筛选功能
+        with st.expander("🔍 筛选条件", expanded=False):
+            col1, col2, col3 = st.columns(3)
+            
+            # 股票代码筛选
+            stock_filter = col1.text_input("股票代码", "")
+            
+            # 盈亏区间筛选
+            min_gain = col2.number_input("最小盈亏(%)", value=-100.0)
+            max_gain = col3.number_input("最大盈亏(%)", value=100.0)
+            
+            # 交易类型筛选
+            trade_type = st.selectbox("交易类型", ["全部", "买入持有", "卖空持有"])
+        
+        # 应用筛选条件
+        filtered_records = all_active_records.copy()
+        
+        if stock_filter:
+            filtered_records = [r for r in filtered_records if stock_filter.lower() in r["code"].lower()]
+        
+        if min_gain != -100 or max_gain != 100:
+            filtered_records = [r for r in filtered_records if min_gain <= r['gain_val'] <= max_gain]
+        
+        if trade_type != "全部":
+            filtered_records = [r for r in filtered_records if r["type"] == trade_type]
+        
+        if filtered_records:
+            # 排序选项
+            sort_option = st.selectbox("排序方式", ["盈亏降序", "盈亏升序", "日期降序", "日期升序"])
+            
+            if sort_option == "盈亏降序":
+                filtered_records.sort(key=lambda x: x['gain_val'], reverse=True)
+            elif sort_option == "盈亏升序":
+                filtered_records.sort(key=lambda x: x['gain_val'])
+            elif sort_option == "日期降序":
+                filtered_records.sort(key=lambda x: x['date'], reverse=True)
+            elif sort_option == "日期升序":
+                filtered_records.sort(key=lambda x: x['date'])
+            
             html = '<table class="custom-table"><thead><tr><th>日期</th><th>股票</th><th>类型</th><th>成交单价</th><th>剩余数量</th><th>单笔盈亏</th></tr></thead><tbody>'
-            for r in all_active_records:
+            for r in filtered_records:
                 c_class = "profit-red" if r['gain_val'] > 0 else "loss-green" if r['gain_val'] < 0 else ""
                 html += f'<tr><td>{r["date"]}</td><td>{r["code"]}</td><td>{r["type"]}</td><td>{r["price"]:.2f}</td><td>{r["qty"]}</td><td class="{c_class}">{r["gain_str"]}</td></tr>'
             st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
+        else:
+            st.info("没有符合条件的活跃单记录。")
 
     else:
         st.info("欢迎使用！请先录入交易。")
@@ -196,25 +236,56 @@ elif choice == "📝 交易录入":
                 c.execute("INSERT INTO trades (date, code, action, price, quantity) VALUES (?,?,?,?,?)", (d.strftime('%Y-%m-%d'), final_code, a, p, q))
                 conn.commit(); st.rerun()
 
+
 elif choice == "🔔 买卖信号":
     st.header("🔔 策略监控信号")
+    
+    # 新增监控部分
     with st.expander("➕ 设置新监控"):
+        # 获取已有监控的股票列表
+        existing_signals = pd.read_sql("SELECT code FROM signals", conn)['code'].tolist()
         s_code = st.selectbox("监控股票", options=get_dynamic_stock_list(), index=None)
+        
+        # 如果选择了已有监控的股票，获取原有参数
+        signal_data = None
+        if s_code and s_code in existing_signals:
+            signal_data = c.execute("""
+                SELECT high_point, low_point, up_threshold, down_threshold, high_date, low_date 
+                FROM signals WHERE code = ?
+            """, (s_code,)).fetchone()
+        
         c1, c2 = st.columns(2)
-        s_high = c1.number_input("高点参考价", value=None, step=0.01)
-        h_date = c1.date_input("高点日期", value=None)
-        s_low = c2.number_input("低点参考价", value=None, step=0.01)
-        l_date = c2.date_input("低点日期", value=None)
-        s_up = c1.number_input("上涨触发 (%)", value=None)
-        s_down = c2.number_input("回调触发 (%)", value=None)
-        if st.button("🚀 启动监控"):
+        
+        # 设置默认值为原有参数或None
+        s_high = c1.number_input("高点参考价", value=float(signal_data[0]) if signal_data else None, step=0.01)
+        h_date = c1.date_input("高点日期", 
+                              value=datetime.strptime(signal_data[4], '%Y-%m-%d').date() if signal_data else None)
+        
+        s_low = c2.number_input("低点参考价", value=float(signal_data[1]) if signal_data else None, step=0.01)
+        l_date = c2.date_input("低点日期", 
+                              value=datetime.strptime(signal_data[5], '%Y-%m-%d').date() if signal_data else None)
+        
+        s_up = c1.number_input("上涨触发 (%)", value=float(signal_data[2]) if signal_data else None)
+        s_down = c2.number_input("回调触发 (%)", value=float(signal_data[3]) if signal_data else None)
+        
+        if st.button("🚀 启动/更新监控"):
             if all([s_code, s_high, s_low, s_up, s_down]):
-                c.execute("INSERT OR REPLACE INTO signals (code, high_point, high_date, low_point, low_date, up_threshold, down_threshold) VALUES (?,?,?,?,?,?,?)",
-                          (s_code, s_high, str(h_date), s_low, str(l_date), s_up, s_down))
-                conn.commit(); st.rerun()
+                c.execute("""
+                    INSERT OR REPLACE INTO signals 
+                    (code, high_point, low_point, up_threshold, down_threshold, high_date, low_date) 
+                    VALUES (?,?,?,?,?,?,?)
+                """, (
+                    s_code, s_high, s_low, s_up, s_down, 
+                    h_date.strftime('%Y-%m-%d') if h_date else None,
+                    l_date.strftime('%Y-%m-%d') if l_date else None
+                ))
+                conn.commit()
+                st.rerun()
 
+    # 修复点：确保监控列表显示部分不被遗漏
     sig_df = pd.read_sql("SELECT * FROM signals", conn)
     prices_map = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    
     if not sig_df.empty:
         html = '<table class="custom-table"><thead><tr><th>代码</th><th>高点(日期)</th><th>低点(日期)</th><th>距高点</th><th>距低点</th><th>建议</th></tr></thead><tbody>'
         for _, r in sig_df.iterrows():
@@ -224,8 +295,16 @@ elif choice == "🔔 买卖信号":
             st_text = "🟢 建议卖出" if rr >= r['up_threshold'] else "🔴 建议买入" if dr <= -r['down_threshold'] else "⚖️ 观望"
             html += f"<tr><td>{r['code']}</td><td>{r['high_point']:.2f}<br><small>{r['high_date']}</small></td><td>{r['low_point']:.2f}<br><small>{r['low_date']}</small></td><td>{dr:.2f}%</td><td>{rr:.2f}%</td><td>{st_text}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
-        if st.button("🗑️ 清空监控"): c.execute("DELETE FROM signals"); conn.commit(); st.rerun()
+        
+        if st.button("🗑️ 清空监控"): 
+            c.execute("DELETE FROM signals")
+            conn.commit()
+            st.rerun()
+    else:
+        st.info("当前没有设置任何监控信号")
 
+
+    
 elif choice == "📜 历史明细":
     st.header("📜 历史交易流水")
     df_h = pd.read_sql("SELECT * FROM trades ORDER BY date DESC, id DESC", conn)
