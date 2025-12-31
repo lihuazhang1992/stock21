@@ -388,22 +388,70 @@ elif choice == "📜 历史明细":
 
 elif choice == "📓 复盘日记":
     st.header("📓 每日复盘")
-    ds = st.selectbox("复盘对象", ["大盘"] + get_dynamic_stock_list(), index=None)
-    cont = st.text_area("心得内容", height=150)
+
+    # --- 提交新日记 ---
+    stock_options = ["大盘"] + get_dynamic_stock_list()
+    ds = st.selectbox("复盘对象", options=stock_options, index=None, key="new_journal_stock")
+    cont = st.text_area("心得内容", height=150, key="new_journal_content")
+
     if st.button("🚀 提交存档"):
         if ds and cont.strip():
             c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
-                      (datetime.now().strftime('%Y-%m-%d'), ds, cont))
+                      (datetime.now().strftime('%Y-%m-%d'), ds, cont.strip()))
             conn.commit()
             st.success("已存档")
             st.rerun()
-    
+        else:
+            st.warning("请选择复盘对象并填写内容")
+
     st.write("---")
-    journal_df = pd.read_sql("SELECT * FROM journal ORDER BY date DESC, id DESC", conn)
-    for _, r in journal_df.iterrows():
-        with st.chat_message("user"):
-            st.write(f"**{r['date']} | {r['stock_name']}**")
-            st.markdown(r['content'])
+
+    # --- 查看历史日记（带筛选和删除功能）---
+    st.subheader("历史复盘记录")
+
+    # 读取所有日记
+    journal_df = pd.read_sql("SELECT id, date, stock_name, content FROM journal ORDER BY date DESC, id DESC", conn)
+
+    if journal_df.empty:
+        st.info("暂无复盘记录")
+    else:
+        # 筛选器：按股票名称
+        unique_stocks = ["全部"] + sorted(journal_df['stock_name'].unique().tolist())
+        selected_stock = st.selectbox("筛选股票/大盘", options=unique_stocks, index=0)
+
+        # 应用筛选
+        if selected_stock != "全部":
+            display_df = journal_df[journal_df['stock_name'] == selected_stock]
+        else:
+            display_df = journal_df
+
+        if display_df.empty:
+            st.info(f"没有找到与「{selected_stock}」相关的复盘记录")
+        else:
+            # 逐条显示，每条带删除按钮
+            for _, row in display_df.iterrows():
+                with st.container():
+                    col_date, col_del = st.columns([6, 1])
+                    with col_date:
+                        st.markdown(f"**{row['date']} | {row['stock_name']}**")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_{row['id']}"):
+                            # 删除确认
+                            if st.session_state.get(f"confirm_del_{row['id']}", False):
+                                c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
+                                conn.commit()
+                                st.success(f"已删除 {row['date']} 的复盘记录")
+                                st.rerun()
+                            else:
+                                st.session_state[f"confirm_del_{row['id']}"] = True
+                                st.warning("⚠️ 确认删除此条记录？再次点击 🗑️ 确认")
+                                st.stop()  # 防止继续渲染后面的内容
+
+                    st.markdown(row['content'])
+                    st.markdown("---")
+
+        # 可选：显示总记录数
+        st.caption(f"共 {len(journal_df)} 条记录，当前显示 {len(display_df)} 条")
 
 # --- 下载数据库按钮 ---
 col1, col2, col3 = st.columns([5, 1, 1])
