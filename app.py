@@ -98,6 +98,15 @@ choice = st.sidebar.radio("功能导航", menu)
 if choice == "📊 实时持仓":
     st.header("📊 持仓盈亏分析")
   
+    # 新增：动态格式化数字的工具函数（放在这个模块开头）
+    def format_number(num):
+        """动态格式化数字，保留有效小数位，去除末尾无意义的0"""
+        if pd.isna(num) or num is None:
+            return "0"
+        # 先转为字符串，去除科学计数法，再清理末尾的0和小数点
+        formatted = f"{num}".rstrip('0').rstrip('.') if '.' in f"{num}" else f"{num}"
+        return formatted
+  
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
   
     if not df_trades.empty:
@@ -113,8 +122,9 @@ if choice == "📊 实时持仓":
                 old_p = float(stored_vals[0]) if stored_vals[0] is not None else 0.0
                 old_c = float(stored_vals[1]) if stored_vals[1] is not None else 0.0
               
-                new_p = col1.number_input(f"{stock} 现价", value=old_p, key=f"p_{stock}", step=0.01)
-                new_c = col2.number_input(f"{stock} 手动成本", value=old_c, key=f"c_{stock}", step=0.01)
+                # 修改1：调小步长到0.0001，支持更多小数位输入（无format限制）
+                new_p = col1.number_input(f"{stock} 现价", value=old_p, key=f"p_{stock}", step=0.0001)
+                new_c = col2.number_input(f"{stock} 手动成本", value=old_c, key=f"c_{stock}", step=0.0001)
               
                 if new_p != old_p or new_c != old_c:
                     c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", (stock, new_p, new_c))
@@ -140,7 +150,15 @@ if choice == "📊 实时持仓":
                 else:
                     p_rate = 0.0
               
-                summary.append([stock, net_q, f"{manual_cost:.2f}", f"{now_p:.2f}", f"{p_rate:.2f}%", p_rate])
+                # 修改2：移除:.2f，改用动态格式化函数
+                summary.append([
+                    stock, 
+                    net_q, 
+                    format_number(manual_cost),  # 手动成本动态显示
+                    format_number(now_p),        # 现价动态显示
+                    f"{p_rate:.2f}%",            # 百分比仍保留2位（常规习惯）
+                    p_rate
+                ])
            
             buys = s_df[s_df['action'] == '买入'].sort_values('price', ascending=True).to_dict('records')
             sells = s_df[s_df['action'] == '卖出'].sort_values('price', ascending=False).to_dict('records')
@@ -156,10 +174,26 @@ if choice == "📊 实时持仓":
           
             for b in [x for x in buys if x['quantity'] > 0]:
                 gain = ((now_p - b['price']) / b['price'] * 100) if b['price'] > 0 else 0
-                all_active_records.append({"date": b['date'], "code": stock, "type": "买入持有", "price": b['price'], "qty": b['quantity'], "gain_str": f"{gain:.2f}%", "gain_val": gain})
+                all_active_records.append({
+                    "date": b['date'], 
+                    "code": stock, 
+                    "type": "买入持有", 
+                    "price": b['price'], 
+                    "qty": b['quantity'], 
+                    "gain_str": f"{gain:.2f}%", 
+                    "gain_val": gain
+                })
             for s in [x for x in temp_sells if x['quantity'] > 0]:
                 gain = ((s['price'] - now_p) / s['price'] * 100) if s['price'] > 0 else 0
-                all_active_records.append({"date": s['date'], "code": stock, "type": "卖空持有", "price": s['price'], "qty": s['quantity'], "gain_str": f"{gain:.2f}%", "gain_val": gain})
+                all_active_records.append({
+                    "date": s['date'], 
+                    "code": stock, 
+                    "type": "卖空持有", 
+                    "price": s['price'], 
+                    "qty": s['quantity'], 
+                    "gain_str": f"{gain:.2f}%", 
+                    "gain_val": gain
+                })
        
         st.subheader("1️⃣ 账户持仓概览 (手动成本模式)")
         if summary:
@@ -167,6 +201,7 @@ if choice == "📊 实时持仓":
             html = '<table class="custom-table"><thead><tr><th>代码</th><th>净持仓</th><th>手动成本</th><th>现价</th><th>盈亏</th></tr></thead><tbody>'
             for r in summary:
                 c_class = "profit-red" if r[5] > 0 else "loss-green" if r[5] < 0 else ""
+                # 这里直接用动态格式化后的结果（r[2]/r[3]已经处理过）
                 html += f'<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td class="{c_class}">{r[4]}</td></tr>'
             st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
         else:
@@ -204,7 +239,8 @@ if choice == "📊 实时持仓":
             html = '<table class="custom-table"><thead><tr><th>日期</th><th>股票</th><th>类型</th><th>成交单价</th><th>剩余数量</th><th>单笔盈亏</th></tr></thead><tbody>'
             for r in filtered_records:
                 c_class = "profit-red" if r['gain_val'] > 0 else "loss-green" if r['gain_val'] < 0 else ""
-                html += f'<tr><td>{r["date"]}</td><td>{r["code"]}</td><td>{r["type"]}</td><td>{r["price"]:.2f}</td><td>{r["qty"]}</td><td class="{c_class}">{r["gain_str"]}</td></tr>'
+                # 修改3：移除:.2f，改用动态格式化函数处理成交单价
+                html += f'<tr><td>{r["date"]}</td><td>{r["code"]}</td><td>{r["type"]}</td><td>{format_number(r["price"])}</td><td>{r["qty"]}</td><td class="{c_class}">{r["gain_str"]}</td></tr>'
             st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
         else:
             st.info("没有符合条件的活跃单记录。")
@@ -366,6 +402,14 @@ elif choice == "📝 交易录入":
 # --- 买卖信号 ---
 elif choice == "🔔 买卖信号":
     st.header("🔔 策略监控信号")
+    
+    # 新增：动态格式化数字函数（去除末尾无意义的0）
+    def format_number(num):
+        """动态格式化数字，保留有效小数位，去除末尾无意义的0"""
+        if pd.isna(num) or num is None or num == 0:
+            return "0"
+        formatted = f"{num}".rstrip('0').rstrip('.') if '.' in f"{num}" else f"{num}"
+        return formatted
   
     with st.expander("➕ 设置新监控"):
         existing_signals = pd.read_sql("SELECT code FROM signals", conn)['code'].tolist()
@@ -379,14 +423,16 @@ elif choice == "🔔 买卖信号":
             """, (s_code,)).fetchone()
       
         c1, c2 = st.columns(2)
-        s_high = c1.number_input("高点参考价", value=float(signal_data[0]) if signal_data else None, step=0.01)
+        # 修改1：调小输入步长到0.0001，支持更多小数位输入（无format限制）
+        s_high = c1.number_input("高点参考价", value=float(signal_data[0]) if signal_data else None, step=0.0001)
         h_date = c1.date_input("高点日期", value=datetime.strptime(signal_data[4], '%Y-%m-%d').date() if signal_data and signal_data[4] else datetime.now())
       
-        s_low = c2.number_input("低点参考价", value=float(signal_data[1]) if signal_data else None, step=0.01)
+        s_low = c2.number_input("低点参考价", value=float(signal_data[1]) if signal_data else None, step=0.0001)
         l_date = c2.date_input("低点日期", value=datetime.strptime(signal_data[5], '%Y-%m-%d').date() if signal_data and signal_data[5] else datetime.now())
       
-        s_up = c1.number_input("上涨触发 (%)", value=float(signal_data[2]) if signal_data else 20.0)
-        s_down = c2.number_input("回调触发 (%)", value=float(signal_data[3]) if signal_data else 20.0)
+        # 百分比输入框也支持更多小数位（可选，保持原有逻辑也可以）
+        s_up = c1.number_input("上涨触发 (%)", value=float(signal_data[2]) if signal_data else 20.0, step=0.01)
+        s_down = c2.number_input("回调触发 (%)", value=float(signal_data[3]) if signal_data else 20.0, step=0.01)
       
         if st.button("🚀 启动/更新监控"):
             if all([s_code, s_high, s_low, s_up, s_down]):
@@ -410,7 +456,12 @@ elif choice == "🔔 买卖信号":
             dr = ((np - r['high_point']) / r['high_point'] * 100) if r['high_point'] > 0 else 0
             rr = ((np - r['low_point']) / r['low_point'] * 100) if r['low_point'] > 0 else 0
             st_text = "🟢 建议卖出" if rr >= r['up_threshold'] else "🔴 建议买入" if dr <= -r['down_threshold'] else "⚖️ 观望"
-            html += f"<tr><td>{r['code']}</td><td>{r['high_point']:.2f}<br><small>{r['high_date']}</small></td><td>{r['low_point']:.2f}<br><small>{r['low_date']}</small></td><td>{dr:.2f}%</td><td>{rr:.2f}%</td><td>{st_text}</td></tr>"
+            
+            # 修改2：移除:.2f，改用动态格式化函数处理高点/低点参考价
+            high_point_formatted = format_number(r['high_point'])
+            low_point_formatted = format_number(r['low_point'])
+            
+            html += f"<tr><td>{r['code']}</td><td>{high_point_formatted}<br><small>{r['high_date']}</small></td><td>{low_point_formatted}<br><small>{r['low_date']}</small></td><td>{dr:.2f}%</td><td>{rr:.2f}%</td><td>{st_text}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
       
         if st.button("🗑️ 清空所有监控"):
