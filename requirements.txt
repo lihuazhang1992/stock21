@@ -1,0 +1,4 @@
+streamlit>=1.30.0
+pandas>=2.1.0
+GitPython>=3.1.41
+python-dotenv>=1.0.0
