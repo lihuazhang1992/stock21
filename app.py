@@ -15,12 +15,12 @@ DB_FILE = "stock_data_v12.db"
 # 仓库主分支（你的是main，不用改）
 GIT_BRANCH = "main"
 
-# --- Streamlit秘钥配置（后续在云端填，这里不用改）---
+# --- Streamlit秘钥配置（修复云端兼容问题，直接定义变量，后续在Secrets填值）---
 # 需在Streamlit Cloud中配置：Settings → Secrets → 填写以下4个参数
-st.secrets.setdefault("GITHUB_PAT", "")
-st.secrets.setdefault("GITHUB_USERNAME", "")
-st.secrets.setdefault("GITHUB_REPO_HTTPS", "")
-st.secrets.setdefault("GIT_USER_EMAIL", "")
+GITHUB_PAT = st.secrets.get("GITHUB_PAT", "")
+GITHUB_USERNAME = st.secrets.get("GITHUB_USERNAME", "")
+GITHUB_REPO_HTTPS = st.secrets.get("GITHUB_REPO_HTTPS", "")
+GIT_USER_EMAIL = st.secrets.get("GIT_USER_EMAIL", "")
 
 # --- 数据库连接（保留原有逻辑，适配云端）---
 def get_connection():
@@ -122,17 +122,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 核心：云端适配的自动同步GitHub函数（重写核心逻辑）---
+# --- 核心：云端适配的自动同步GitHub函数（修复秘钥调用，适配云端）---
 def auto_sync_github():
     """
     数据修改后自动同步数据库文件到GitHub（适配Streamlit Cloud云端，PAT+HTTPS免密）
     同步结果会在页面右下角弹出提示
     """
-    # 1. 检查秘钥是否配置，未配置直接提示
-    pat = st.secrets.get("GITHUB_PAT", "").strip()
-    username = st.secrets.get("GITHUB_USERNAME", "").strip()
-    repo_https = st.secrets.get("GITHUB_REPO_HTTPS", "").strip()
-    git_email = st.secrets.get("GIT_USER_EMAIL", "").strip()
+    # 1. 检查秘钥是否配置，未配置直接提示（直接调用全局变量，修复云端兼容）
+    pat = GITHUB_PAT.strip()
+    username = GITHUB_USERNAME.strip()
+    repo_https = GITHUB_REPO_HTTPS.strip()
+    git_email = GIT_USER_EMAIL.strip()
     if not all([pat, username, repo_https, git_email]):
         st.toast("⚠️ GitHub同步未配置：请在Streamlit秘钥中填写PAT/用户名/仓库地址/邮箱", icon="⚠️")
         return
