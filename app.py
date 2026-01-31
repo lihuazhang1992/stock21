@@ -21,17 +21,22 @@ def auto_commit():
         return
     try:
         repo_dir = pathlib.Path(__file__).with_name(".git_repo")
+        auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
+        
         if not repo_dir.exists():
-            repo = Repo.clone_from(REPO_URL.replace("https://",
-                                   f"https://x-access-token:{TOKEN}@"),
-                                   repo_dir, depth=1)
+            repo = Repo.clone_from(auth_url, repo_dir, depth=1)
         else:
             repo = Repo(repo_dir)
-            repo.remotes.origin.pull()
+            origin = repo.remotes.origin
+            # 关键修复：确保远程地址始终带 token
+            origin.set_url(auth_url)
+            origin.pull()
+
         shutil.copy2(DB_FILE, repo_dir / DB_FILE.name)
-        repo.git.add(DB_FILE.name)
-        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
-        repo.remotes.origin.push()
+        if repo.is_dirty(untracked_files=True):
+            repo.git.add(DB_FILE.name)
+            repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
+            repo.remotes.origin.push()
     except Exception as e:
         st.toast(f"git auto-push 失败：{e}", icon="⚠️")
 # ==========================================
@@ -755,5 +760,6 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
