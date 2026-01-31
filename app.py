@@ -1,3 +1,5 @@
+from git import Repo
+import os, shutil, streamlit as st_git
 import pathlib
 import streamlit as st
 import pandas as pd
@@ -70,6 +72,7 @@ try:
 except sqlite3.OperationalError:
     pass
 conn.commit()
+auto_commit()
 
 def get_dynamic_stock_list():
     try:
@@ -130,6 +133,7 @@ if choice == "📊 实时持仓":
                     c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", 
                               (stock, new_p, new_c))
                     conn.commit()
+                    auto_commit()
        
         # 读取最新的现价/成本配置
         final_raw = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
@@ -382,6 +386,7 @@ elif choice == "🎯 价格目标管理":
             except sqlite3.OperationalError:
                 pass
         conn.commit()
+        auto_commit()
 
     current_prices = {row[0]: row[1] or 0.0
                       for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
@@ -410,6 +415,7 @@ elif choice == "🎯 价格目标管理":
                     VALUES (?,?,?,?)
                 """, (selected_stock, buy_base, sell_base, now_str))
                 conn.commit()
+                auto_commit()
                 st.success("已保存")
 
     # ---- 3. 栅格卡片（一排两张，紧凑） ----
@@ -489,6 +495,7 @@ elif choice == "📝 交易录入":
                     VALUES (?,?,?,?,?,?)
                 """, (d.strftime('%Y-%m-%d'), final_code, a, p, q, note if note.strip() else None))
                 conn.commit()
+                auto_commit()
                 st.success("交易记录已保存！")
                 st.rerun()
 
@@ -536,6 +543,7 @@ elif choice == "🔔 买卖信号":
                 """, (s_code, s_high, s_low, s_up, s_down,
                       h_date.strftime('%Y-%m-%d'), l_date.strftime('%Y-%m-%d')))
                 conn.commit()
+                auto_commit()
                 st.success("监控已更新")
                 st.rerun()
    
@@ -560,6 +568,7 @@ elif choice == "🔔 买卖信号":
         if st.button("🗑️ 清空所有监控"):
             c.execute("DELETE FROM signals")
             conn.commit()
+            auto_commit()
             st.rerun()
     else:
         st.info("当前没有设置任何监控信号")
@@ -623,6 +632,7 @@ elif choice == "📜 历史明细":
                         # 替换整个表（现在是完整数据，安全）
                         save_df.to_sql('trades', conn, if_exists='replace', index=False)
                         conn.commit()
+                        auto_commit()
                         st.success("所有交易记录已成功更新！")
                         st.rerun()
                     except Exception as e:
@@ -642,6 +652,7 @@ elif choice == "📓 复盘日记":
         )
     """)
     conn.commit()
+    auto_commit()
 
     # 2) 写新日记
     with st.expander("✍️ 写新日记", expanded=True):
@@ -653,6 +664,7 @@ elif choice == "📓 复盘日记":
                 c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
                           (datetime.now().strftime('%Y-%m-%d'), ds, content.strip()))
                 conn.commit()
+                auto_commit()
                 st.success("已存档")
                 st.rerun()
             else:
@@ -689,6 +701,7 @@ elif choice == "📓 复盘日记":
                         if st.session_state.get(f"confirm_{row['id']}", False):
                             c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
                             conn.commit()
+                            auto_commit()
                             st.success("已删除")
                             st.rerun()
                         else:
@@ -711,3 +724,34 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+# ============== 自动备份 GitHub ==============
+DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
+try:                       # 本地优先 .env；Cloud 用 st.secrets
+    from dotenv import load_dotenv
+    load_dotenv()
+    TOKEN    = os.getenv("GITHUB_TOKEN")
+    REPO_URL = os.getenv("REPO_URL")
+except Exception:
+    TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
+    REPO_URL = st.secrets.get("REPO_URL", "")
+
+def auto_commit():
+    if not (TOKEN and REPO_URL):
+        return
+    try:
+        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
+        if not repo_dir.exists():
+            repo = Repo.clone_from(REPO_URL.replace("https://",
+                                   f"https://x-access-token:{TOKEN}@"),
+                                   repo_dir, depth=1)
+        else:
+            repo = Repo(repo_dir)
+            repo.remotes.origin.pull()
+        shutil.copy2(DB_FILE, repo_dir / DB_FILE.name)
+        repo.git.add(DB_FILE.name)
+        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
+        repo.remotes.origin.push()
+    except Exception as e:
+        st.toast(f"git auto-push 失败：{e}", icon="⚠️")
+# ==========================================
+
