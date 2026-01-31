@@ -16,41 +16,41 @@ except Exception:
     TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
     REPO_URL = st.secrets.get("REPO_URL", "")
 
-def auto_commit():
+def sync_db_to_github():
+    """将本地数据库推送到 GitHub"""
     if not (TOKEN and REPO_URL):
         return
     
     try:
         repo_dir = pathlib.Path(__file__).with_name(".git_repo")
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
+        db_name = DB_FILE.name
 
-        # === 第一步：初始化或更新本地仓库 ===
+        # 初始化仓库（仅首次）
         if not (repo_dir / ".git").exists():
-            # 首次：克隆（可以 shallow）
             Repo.clone_from(auth_url, repo_dir, depth=1)
-        else:
-            # 后续：进入已有仓库，拉取最新（避免冲突）
-            repo = Repo(repo_dir)
-            origin = repo.remotes.origin
-            # 可选：先 pull（但要小心冲突；这里我们只关心覆盖 db 文件，可跳过 pull）
-            # origin.pull()  # 如果你确定远程不会改 db 文件，可以省略
-
-        # 重新加载 repo（确保是最新实例）
+        
         repo = Repo(repo_dir)
+        origin = repo.remotes.origin
 
-        # === 第二步：复制数据库文件 ===
-        db_dest = repo_dir / DB_FILE.name
-        shutil.copy2(DB_FILE, db_dest)
+        # 同步远程状态（避免 push 被拒）
+        origin.fetch()
+        remote_ref = 'main' if 'main' in [ref.name for ref in origin.refs] else 'master'
+        repo.git.reset('--hard', f'origin/{remote_ref}')
 
-        # === 第三步：检查是否有变更 ===
-        if repo.is_dirty(untracked_files=True):
-            repo.git.add(DB_FILE.name)
-            repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
-            repo.remotes.origin.push()
-        # else: 无变化，不提交（可选优化）
+        # 复制本地 DB 到仓库
+        shutil.copy2(DB_FILE, repo_dir / db_name)
+
+        # 提交并推送
+        repo.index.add([db_name])
+        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
+        push_info = origin.push()[0]
+
+        if push_info.flags & push_info.ERROR:
+            raise Exception(f"Push failed: {push_info.summary}")
 
     except Exception as e:
-        st.toast(f"git auto-push 失败：{e}", icon="⚠️")
+        st.toast(f"⚠️ GitHub 备份失败: {e}", icon="⚠️")
 # ==========================================
 
 
@@ -59,7 +59,23 @@ st.set_page_config(page_title="股票管理系统 v22.1", layout="wide")
 
 def get_connection():
     return sqlite3.connect(pathlib.Path(__file__).with_name("stock_data_v12.db"), check_same_thread=False)
-
+# === 启动时：如果本地没有数据库，从 GitHub 下载 ===
+if not DB_FILE.exists():
+    try:
+        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir)
+        auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
+        Repo.clone_from(auth_url, repo_dir, depth=1)
+        remote_db = repo_dir / DB_FILE.name
+        if remote_db.exists():
+            shutil.copy2(remote_db, DB_FILE)
+            st.toast("✅ 已从 GitHub 加载数据库", icon="📥")
+        else:
+            st.toast("🆕 GitHub 无数据库，将创建新库", icon="✨")
+    except Exception as e:
+        st.error(f"❌ 无法从 GitHub 加载数据库: {e}")
+        st.stop()  # 停止运行
 conn = get_connection()
 c = conn.cursor()
 
@@ -120,7 +136,7 @@ try:
 except sqlite3.OperationalError:
     pass
 conn.commit()
-auto_commit()
+sync_db_to_github()
 
 def get_dynamic_stock_list():
     try:
@@ -181,7 +197,7 @@ if choice == "📊 实时持仓":
                     c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", 
                               (stock, new_p, new_c))
                     conn.commit()
-                    auto_commit()
+                    sync_db_to_github()
        
         # 读取最新的现价/成本配置
         final_raw = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
@@ -434,7 +450,7 @@ elif choice == "🎯 价格目标管理":
             except sqlite3.OperationalError:
                 pass
         conn.commit()
-        auto_commit()
+        sync_db_to_github()
 
     current_prices = {row[0]: row[1] or 0.0
                       for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
@@ -463,7 +479,7 @@ elif choice == "🎯 价格目标管理":
                     VALUES (?,?,?,?)
                 """, (selected_stock, buy_base, sell_base, now_str))
                 conn.commit()
-                auto_commit()
+                sync_db_to_github()
                 st.success("已保存")
 
     # ---- 3. 栅格卡片（一排两张，紧凑） ----
@@ -543,7 +559,7 @@ elif choice == "📝 交易录入":
                     VALUES (?,?,?,?,?,?)
                 """, (d.strftime('%Y-%m-%d'), final_code, a, p, q, note if note.strip() else None))
                 conn.commit()
-                auto_commit()
+                sync_db_to_github()
                 st.success("交易记录已保存！")
                 st.rerun()
 
@@ -591,7 +607,7 @@ elif choice == "🔔 买卖信号":
                 """, (s_code, s_high, s_low, s_up, s_down,
                       h_date.strftime('%Y-%m-%d'), l_date.strftime('%Y-%m-%d')))
                 conn.commit()
-                auto_commit()
+                sync_db_to_github()
                 st.success("监控已更新")
                 st.rerun()
    
@@ -616,7 +632,7 @@ elif choice == "🔔 买卖信号":
         if st.button("🗑️ 清空所有监控"):
             c.execute("DELETE FROM signals")
             conn.commit()
-            auto_commit()
+            sync_db_to_github()
             st.rerun()
     else:
         st.info("当前没有设置任何监控信号")
@@ -680,7 +696,7 @@ elif choice == "📜 历史明细":
                         # 替换整个表（现在是完整数据，安全）
                         save_df.to_sql('trades', conn, if_exists='replace', index=False)
                         conn.commit()
-                        auto_commit()
+                        sync_db_to_github()
                         st.success("所有交易记录已成功更新！")
                         st.rerun()
                     except Exception as e:
@@ -700,7 +716,7 @@ elif choice == "📓 复盘日记":
         )
     """)
     conn.commit()
-    auto_commit()
+    sync_db_to_github()
 
     # 2) 写新日记
     with st.expander("✍️ 写新日记", expanded=True):
@@ -712,7 +728,7 @@ elif choice == "📓 复盘日记":
                 c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
                           (datetime.now().strftime('%Y-%m-%d'), ds, content.strip()))
                 conn.commit()
-                auto_commit()
+                sync_db_to_github()
                 st.success("已存档")
                 st.rerun()
             else:
@@ -749,7 +765,7 @@ elif choice == "📓 复盘日记":
                         if st.session_state.get(f"confirm_{row['id']}", False):
                             c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
                             conn.commit()
-                            auto_commit()
+                            sync_db_to_github()
                             st.success("已删除")
                             st.rerun()
                         else:
@@ -772,6 +788,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
