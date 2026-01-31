@@ -19,25 +19,36 @@ except Exception:
 def auto_commit():
     if not (TOKEN and REPO_URL):
         return
+    
     try:
         repo_dir = pathlib.Path(__file__).with_name(".git_repo")
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        
-        # === 关键：每次删除旧目录，确保干净 clone ===
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir)
-        
-        # 克隆最新版本（depth=1 足够）
-        repo = Repo.clone_from(auth_url, repo_dir, depth=1)
-        
-        # 复制数据库文件
-        shutil.copy2(DB_FILE, repo_dir / DB_FILE.name)
-        
-        # 添加、提交、推送
-        repo.git.add(DB_FILE.name)
-        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
-        repo.remotes.origin.push()
-        
+
+        # === 第一步：初始化或更新本地仓库 ===
+        if not (repo_dir / ".git").exists():
+            # 首次：克隆（可以 shallow）
+            Repo.clone_from(auth_url, repo_dir, depth=1)
+        else:
+            # 后续：进入已有仓库，拉取最新（避免冲突）
+            repo = Repo(repo_dir)
+            origin = repo.remotes.origin
+            # 可选：先 pull（但要小心冲突；这里我们只关心覆盖 db 文件，可跳过 pull）
+            # origin.pull()  # 如果你确定远程不会改 db 文件，可以省略
+
+        # 重新加载 repo（确保是最新实例）
+        repo = Repo(repo_dir)
+
+        # === 第二步：复制数据库文件 ===
+        db_dest = repo_dir / DB_FILE.name
+        shutil.copy2(DB_FILE, db_dest)
+
+        # === 第三步：检查是否有变更 ===
+        if repo.is_dirty(untracked_files=True):
+            repo.git.add(DB_FILE.name)
+            repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
+            repo.remotes.origin.push()
+        # else: 无变化，不提交（可选优化）
+
     except Exception as e:
         st.toast(f"git auto-push 失败：{e}", icon="⚠️")
 # ==========================================
@@ -761,6 +772,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
