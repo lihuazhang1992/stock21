@@ -145,6 +145,8 @@ def auto_sync_github():
 
     # 3. 构造带PAT的仓库地址（核心：免密推送）
     pat_repo_https = repo_https.replace("https://", f"https://{username}:{pat}@")
+    # 调试：显示拼接后的仓库地址
+    st.toast(f"拼接后的仓库地址：{pat_repo_https}", icon="ℹ️")
     local_repo_path = pathlib.Path(__file__).parent.absolute()
 
     try:
@@ -155,10 +157,14 @@ def auto_sync_github():
             origin = repo.remote(name="origin")
             origin.fetch()
             repo.git.checkout(GIT_BRANCH)
-            repo.git.pull(origin, GIT_BRANCH)
+            # 强制拉取，解决缓存冲突
+            repo.git.pull(origin, GIT_BRANCH, force=True)
         else:
             # 首次运行，克隆仓库到本地
             repo = git.Repo.clone_from(pat_repo_https, local_repo_path, branch=GIT_BRANCH)
+        
+        # 调试：显示当前仓库的远程地址
+        st.toast(f"当前仓库远程地址：{repo.remote('origin').url}", icon="ℹ️")
 
         # 5. 配置Git用户信息（云端必须配置）
         repo.config_writer().set_value("user", "name", username).release()
@@ -711,3 +717,4 @@ with col3:
 
 # 关闭数据库连接
 conn.close()
+
