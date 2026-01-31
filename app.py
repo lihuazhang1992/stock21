@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from github import Github, GithubException
 
-# --- 1. 基础配置与数据库连接 ---
+# --- 基础配置 ---
 st.set_page_config(page_title="股票管理系统 v22.1", layout="wide")
 
 def get_connection():
@@ -14,7 +14,7 @@ def get_connection():
 conn = get_connection()
 c = conn.cursor()
 
-# --- 数据库表结构自动升级 ---
+# --- 创建/升级表结构 ---
 c.execute('''
     CREATE TABLE IF NOT EXISTS trades (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +62,6 @@ c.execute('''
     )
 ''')
 
-# 动态增加缺失列
 try: c.execute("ALTER TABLE prices ADD COLUMN manual_cost REAL DEFAULT 0.0"); conn.commit()
 except: pass
 try: c.execute("ALTER TABLE trades ADD COLUMN note TEXT"); conn.commit()
@@ -71,11 +70,11 @@ except: pass
 def get_dynamic_stock_list():
     try:
         t_stocks = pd.read_sql("SELECT DISTINCT code FROM trades", conn)['code'].tolist()
-        return sorted(list(set(["汇丰控股", "中芯国际", "比亚迪"] + [s for s in t_stocks if s])))
+        return sorted(list(set(["汇丰控股", "中芯国际", "比亚迪"] + t_stocks)))
     except:
         return ["汇丰控股", "中芯国际", "比亚迪"]
 
-# 注入 CSS 样式（保持原样）
+# CSS 样式
 st.markdown("""
     <style>
     .custom-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
@@ -87,15 +86,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ───────────────────────────────────────────────
-#           新增：同步数据库到 GitHub
-# ───────────────────────────────────────────────
+# --- 同步数据库到 GitHub ---
 def sync_db_to_github():
     db_filename = "stock_data_v12.db"
     local_path = pathlib.Path(__file__).with_name(db_filename)
-
     if not local_path.exists():
-        return  # 静默跳过（首次运行可能还没生成）
+        return
 
     try:
         token = st.secrets["GITHUB_TOKEN"]
@@ -108,133 +104,98 @@ def sync_db_to_github():
         with open(local_path, "rb") as f:
             content = f.read()
 
-        commit_msg = f"Auto sync stock_data_v12.db - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        commit_msg = f"Auto sync {db_filename} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
         try:
             file = repo.get_contents(db_filename)
-            repo.update_file(
-                path=db_filename,
-                message=commit_msg,
-                content=content,
-                sha=file.sha,
-                branch="main"          # 如果您的默认分支是 master 请改成 "master"
-            )
+            repo.update_file(db_filename, commit_msg, content, file.sha, branch="main")
         except GithubException as e:
             if e.status == 404:
-                repo.create_file(
-                    path=db_filename,
-                    message=commit_msg,
-                    content=content,
-                    branch="main"
-                )
-            else:
-                raise
-
-        # st.toast("数据已同步到 GitHub", icon="✅")  # 可选，频繁弹出会烦人，可注释
-
+                repo.create_file(db_filename, commit_msg, content, branch="main")
     except Exception as e:
-        st.error(f"同步到 GitHub 失败：{str(e)}")
+        st.error(f"同步失败：{str(e)}")
 
-# ───────────────────────────────────────────────
-#           侧边栏导航（原样）
-# ───────────────────────────────────────────────
-menu = ["📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
+# --- 侧边栏菜单（去掉 emoji 测试兼容性） ---
+menu = [
+    "实时持仓",
+    "盈利账单",
+    "价格目标管理",
+    "交易录入",
+    "买卖信号",
+    "历史明细",
+    "复盘日记"
+]
 choice = st.sidebar.radio("功能导航", menu)
 
-# ───────────────────────────────────────────────
-#           以下是各个页面，commit 后都加了 sync
-# ───────────────────────────────────────────────
+# 调试输出：显示当前 choice 值
+st.sidebar.write("当前选择：", choice)
 
-if choice == "📊 实时持仓":
-    st.header("📊 持仓盈亏分析")
-  
-    def format_number(num):
-        if pd.isna(num) or num is None:
-            return "0"
-        num_str = f"{num}"
-        formatted = num_str.rstrip('0').rstrip('.') if '.' in num_str else num_str
-        return formatted
-  
+# --- 主内容区 ---
+if choice == "实时持仓":
+    st.header("实时持仓")
+    st.write("这里是持仓页面 - 如果看到这行说明分支正常执行")
+
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
-  
-    if not df_trades.empty:
-        stocks = df_trades['code'].unique()
-      
-        with st.expander("🛠️ 维护现价与手动成本", expanded=True):
-            raw_prices = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
-            config_query = {row[0]: (row[1], row[2]) for row in raw_prices}
-          
-            for stock in stocks:
-                col1, col2 = st.columns(2)
-                stored_vals = config_query.get(stock, (0.0, 0.0))
-                old_p = float(stored_vals[0]) if stored_vals[0] is not None else 0.0
-                old_c = float(stored_vals[1]) if stored_vals[1] is not None else 0.0
-              
-                new_p = col1.number_input(f"{stock} 现价", value=old_p, key=f"p_{stock}", step=0.0001)
-                new_c = col2.number_input(f"{stock} 手动成本", value=old_c, key=f"c_{stock}", step=0.0001)
-              
-                if new_p != old_p or new_c != old_c:
-                    c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", 
-                              (stock, new_p, new_c))
-                    conn.commit()
-                    sync_db_to_github()   # ← 这里同步
-      
-        # 后面持仓计算逻辑保持原样（太长，省略不变部分）
-        # ... 您的原持仓计算、表格显示代码 ...
-
+    if df_trades.empty:
+        st.info("暂无交易记录")
     else:
-        st.info("📌 交易数据库为空，请先录入交易记录")
+        st.write("有交易数据，共", len(df_trades), "条")
 
-# ───────────── 交易录入 ─────────────
-elif choice == "📝 交易录入":
-    st.header("📝 交易录入")
+elif choice == "盈利账单":
+    st.header("盈利账单")
+    st.write("盈利账单页面")
+
+elif choice == "价格目标管理":
+    st.header("价格目标管理")
+    st.write("价格目标页面")
+
+elif choice == "交易录入":
+    st.header("交易录入")
+    st.write("交易录入页面 - 请测试是否能看到输入框")
+
     full_list = get_dynamic_stock_list()
-    t_code = st.selectbox("选择股票", options=["【添加新股票】"] + full_list, index=None)
-    final_code = st.text_input("新股票名（必填）") if t_code == "【添加新股票】" else t_code
-    
+    t_code = st.selectbox("选择股票", options=["【添加新股票】"] + full_list)
+    final_code = st.text_input("新股票名（如果选添加新股票）") if t_code == "【添加新股票】" else t_code
+
     with st.form("trade_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        d = c1.date_input("日期", datetime.now())
-        a = c2.selectbox("操作", ["买入", "卖出"])
-       
-        p = c1.number_input("单价", value=None, min_value=0.0, step=0.001, format="%.3f")
-        q = c2.number_input("数量", value=None, min_value=1, step=1)
-       
-        note = st.text_input("备注（可选）", placeholder="例如：突破20日均线买入、分红除权、止盈卖出等")
-        submitted = st.form_submit_button("保存交易")
-        
-        if submitted:
-            if not final_code:
-                st.error("请填写或选择股票代码")
-            elif p is None or q is None:
-                st.error("请填写单价和数量")
-            else:
-                c.execute("""
-                    INSERT INTO trades (date, code, action, price, quantity, note)
-                    VALUES (?,?,?,?,?,?)
-                """, (d.strftime('%Y-%m-%d'), final_code, a, p, q, note if note.strip() else None))
-                conn.commit()
-                sync_db_to_github()          # ← 这里同步
-                st.success("交易记录已保存！")
-                st.rerun()
+        col1, col2 = st.columns(2)
+        d = col1.date_input("日期", datetime.now())
+        a = col2.selectbox("操作", ["买入", "卖出"])
+        p = col1.number_input("单价", min_value=0.0, step=0.001, format="%.3f")
+        q = col2.number_input("数量", min_value=1, step=1)
+        note = st.text_input("备注（可选）")
+        submitted = st.form_submit_button("保存")
 
-# ───────────── 其他页面也类似，在每个 commit 后加 sync_db_to_github() ─────────────
-# 例如：
-#   价格目标管理 保存按钮后
-#   买卖信号 启动/更新监控 后
-#   历史明细 提交所有修改 后
-#   复盘日记 保存日记 后
+        if submitted and final_code and p is not None and q is not None:
+            c.execute("""
+                INSERT INTO trades (date, code, action, price, quantity, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (d.strftime('%Y-%m-%d'), final_code, a, p, q, note or None))
+            conn.commit()
+            sync_db_to_github()
+            st.success("保存成功")
+            st.rerun()
 
-# （由于篇幅，这里只展示两个典型页面，其他页面您可以照着加 commit 后调用 sync_db_to_github()）
+elif choice == "买卖信号":
+    st.header("买卖信号")
+    st.write("买卖信号页面")
 
-# ───────────── 下载按钮（保持原样） ─────────────
+elif choice == "历史明细":
+    st.header("历史明细")
+    st.write("历史明细页面")
+
+elif choice == "复盘日记":
+    st.header("复盘日记")
+    st.write("复盘日记页面")
+
+# 下载按钮（放在最后，无条件显示）
 col1, col2, col3 = st.columns([5, 1, 1])
 with col3:
     db_path = pathlib.Path(__file__).with_name("stock_data_v12.db")
     if db_path.exists():
         with open(db_path, "rb") as f:
             st.download_button(
-                label="📥 下载数据库",
+                label="下载数据库",
                 data=f,
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
