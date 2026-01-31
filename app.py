@@ -5,6 +5,37 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
+# ============== 自动备份 GitHub ==============
+DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
+try:                       # 本地优先 .env；Cloud 用 st.secrets
+    from dotenv import load_dotenv
+    load_dotenv()
+    TOKEN    = os.getenv("GITHUB_TOKEN")
+    REPO_URL = os.getenv("REPO_URL")
+except Exception:
+    TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
+    REPO_URL = st.secrets.get("REPO_URL", "")
+
+def auto_commit():
+    if not (TOKEN and REPO_URL):
+        return
+    try:
+        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
+        if not repo_dir.exists():
+            repo = Repo.clone_from(REPO_URL.replace("https://",
+                                   f"https://x-access-token:{TOKEN}@"),
+                                   repo_dir, depth=1)
+        else:
+            repo = Repo(repo_dir)
+            repo.remotes.origin.pull()
+        shutil.copy2(DB_FILE, repo_dir / DB_FILE.name)
+        repo.git.add(DB_FILE.name)
+        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
+        repo.remotes.origin.push()
+    except Exception as e:
+        st.toast(f"git auto-push 失败：{e}", icon="⚠️")
+# ==========================================
+
 
 # --- 1. 基础配置与数据库连接 ---
 st.set_page_config(page_title="股票管理系统 v22.1", layout="wide")
@@ -724,34 +755,5 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-# ============== 自动备份 GitHub ==============
-DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
-try:                       # 本地优先 .env；Cloud 用 st.secrets
-    from dotenv import load_dotenv
-    load_dotenv()
-    TOKEN    = os.getenv("GITHUB_TOKEN")
-    REPO_URL = os.getenv("REPO_URL")
-except Exception:
-    TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
-    REPO_URL = st.secrets.get("REPO_URL", "")
 
-def auto_commit():
-    if not (TOKEN and REPO_URL):
-        return
-    try:
-        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
-        if not repo_dir.exists():
-            repo = Repo.clone_from(REPO_URL.replace("https://",
-                                   f"https://x-access-token:{TOKEN}@"),
-                                   repo_dir, depth=1)
-        else:
-            repo = Repo(repo_dir)
-            repo.remotes.origin.pull()
-        shutil.copy2(DB_FILE, repo_dir / DB_FILE.name)
-        repo.git.add(DB_FILE.name)
-        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
-        repo.remotes.origin.push()
-    except Exception as e:
-        st.toast(f"git auto-push 失败：{e}", icon="⚠️")
-# ==========================================
 
