@@ -98,20 +98,21 @@ choice = st.sidebar.radio("功能导航", menu)
 if choice == "📊 实时持仓":
     st.header("📊 持仓盈亏分析")
   
-    # 新增：动态格式化数字的工具函数（放在这个模块开头）
+    # 动态格式化数字的工具函数：去除末尾无意义的0
     def format_number(num):
-        """动态格式化数字，保留有效小数位，去除末尾无意义的0"""
         if pd.isna(num) or num is None:
             return "0"
-        # 先转为字符串，去除科学计数法，再清理末尾的0和小数点
-        formatted = f"{num}".rstrip('0').rstrip('.') if '.' in f"{num}" else f"{num}"
+        num_str = f"{num}"
+        formatted = num_str.rstrip('0').rstrip('.') if '.' in num_str else num_str
         return formatted
   
+    # 读取交易数据并按时间初始排序
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
   
     if not df_trades.empty:
         stocks = df_trades['code'].unique()
       
+        # 维护个股现价/手动成本
         with st.expander("🛠️ 维护现价与手动成本", expanded=True):
             raw_prices = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
             config_query = {row[0]: (row[1], row[2]) for row in raw_prices}
@@ -122,111 +123,202 @@ if choice == "📊 实时持仓":
                 old_p = float(stored_vals[0]) if stored_vals[0] is not None else 0.0
                 old_c = float(stored_vals[1]) if stored_vals[1] is not None else 0.0
               
-                # 修改1：调小步长到0.0001，支持更多小数位输入（无format限制）
                 new_p = col1.number_input(f"{stock} 现价", value=old_p, key=f"p_{stock}", step=0.0001)
                 new_c = col2.number_input(f"{stock} 手动成本", value=old_c, key=f"c_{stock}", step=0.0001)
               
                 if new_p != old_p or new_c != old_c:
-                    c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", (stock, new_p, new_c))
+                    c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)", 
+                              (stock, new_p, new_c))
                     conn.commit()
        
+        # 读取最新的现价/成本配置
         final_raw = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
         latest_config = {row[0]: (row[1], row[2]) for row in final_raw}
       
         summary = []
-        all_active_records = []
+        all_active_records = []  # 存储所有配对交易对+未平仓持仓
+        
+        # 按个股处理交易和持仓
         for stock in stocks:
             s_df = df_trades[df_trades['code'] == stock].copy()
             now_p, manual_cost = latest_config.get(stock, (0.0, 0.0))
           
-            net_q = s_df[s_df['action'] == '买入']['quantity'].sum() - s_df[s_df['action'] == '卖出']['quantity'].sum()
+            # 计算净持仓（买入总量-卖出总量）
+            net_buy = s_df[s_df['action'] == '买入']['quantity'].sum()
+            net_sell = s_df[s_df['action'] == '卖出']['quantity'].sum()
+            net_q = net_buy - net_sell
           
+            # 计算账户层面的盈亏比例
             if net_q != 0:
                 if manual_cost > 0:
                     if net_q > 0:
-                        p_rate = ((now_p - manual_cost) / manual_cost * 100)
+                        p_rate = ((now_p - manual_cost) / manual_cost) * 100  # 正向持仓盈亏
                     else:
-                        p_rate = ((manual_cost - now_p) / manual_cost * 100)
+                        p_rate = ((manual_cost - now_p) / manual_cost) * 100  # 卖空持仓盈亏
                 else:
                     p_rate = 0.0
-              
-                # 修改2：移除:.2f，改用动态格式化函数
                 summary.append([
-                    stock, 
-                    net_q, 
-                    format_number(manual_cost),  # 手动成本动态显示
-                    format_number(now_p),        # 现价动态显示
-                    f"{p_rate:.2f}%",            # 百分比仍保留2位（常规习惯）
-                    p_rate
+                    stock, net_q, format_number(manual_cost),
+                    format_number(now_p), f"{p_rate:.2f}%", p_rate
                 ])
            
-            buys = s_df[s_df['action'] == '买入'].sort_values('price', ascending=True).to_dict('records')
-            sells = s_df[s_df['action'] == '卖出'].sort_values('price', ascending=False).to_dict('records')
-            temp_sells = [dict(s) for s in sells]
-            for s in temp_sells:
-                s_qty = s['quantity']
-                for b in buys:
-                    if b['quantity'] > 0 and s_qty > 0:
-                        take = min(b['quantity'], s_qty)
-                        b['quantity'] -= take
-                        s_qty -= take
-                s['quantity'] = s_qty
-          
-            for b in [x for x in buys if x['quantity'] > 0]:
-                gain = ((now_p - b['price']) / b['price'] * 100) if b['price'] > 0 else 0
+            # ------------------- 核心逻辑：逐笔时间流处理交易（无时间穿越） -------------------
+            buy_positions = []  # 动态维护的正向持仓池（仅存未平仓买入单）
+            sell_positions = []  # 动态维护的卖空持仓池（仅存未平仓卖出单）
+            paired_trades = []   # 存储已配对的交易对
+
+            # 严格按【交易日期+ID】升序处理每一笔交易，保证时间流正确
+            for _, trade in s_df.sort_values(['date', 'id']).iterrows():
+                trade_date = trade['date']
+                action = trade['action']
+                price = trade['price']
+                qty = trade['quantity']
+                remaining = qty  # 初始化剩余未处理数量
+
+                if action == '买入':
+                    # 步骤1：先回补卖空持仓（高价卖空单优先回补，锁定卖空盈利）
+                    if sell_positions and remaining > 0:
+                        # 卖空单按价格从高到低排序，高价优先回补
+                        for sp in sorted(sell_positions, key=lambda x: -x['price']):
+                            if remaining <= 0:
+                                break
+                            if sp['qty'] <= 0:
+                                continue
+                            # 计算回补数量（取剩余买入量和卖空单量的最小值）
+                            cover_qty = min(sp['qty'], remaining)
+                            # 计算卖空回补的盈亏比例
+                            gain = ((sp['price'] - price) / sp['price'] * 100) if sp['price'] > 0 else 0.0
+                            # 记录配对交易对
+                            paired_trades.append({
+                                "date": f"{sp['date']} → {trade_date}",
+                                "code": stock,
+                                "type": "✅ 已配对交易对",
+                                "price": f"{format_number(sp['price'])} → {format_number(price)}",
+                                "qty": cover_qty,
+                                "gain_str": f"{gain:.2f}%",
+                                "gain_val": gain
+                            })
+                            # 更新持仓数量
+                            sp['qty'] -= cover_qty
+                            remaining -= cover_qty
+                        # 清理已耗尽的卖空持仓（数量为0的移除）
+                        sell_positions = [sp for sp in sell_positions if sp['qty'] > 0]
+
+                    # 步骤2：剩余买入量加入正向持仓池（成为未平仓买入）
+                    if remaining > 0:
+                        buy_positions.append({
+                            'date': trade_date,
+                            'price': price,
+                            'qty': remaining
+                        })
+
+                elif action == '卖出':
+                    # 步骤1：先平仓正向持仓（低价买入单优先平仓，锁定低价盈利）
+                    if buy_positions and remaining > 0:
+                        # 买入单按价格从低到高排序，低价优先平仓
+                        for bp in sorted(buy_positions, key=lambda x: x['price']):
+                            if remaining <= 0:
+                                break
+                            if bp['qty'] <= 0:
+                                continue
+                            # 计算平仓数量（取剩余卖出量和买入单量的最小值）
+                            close_qty = min(bp['qty'], remaining)
+                            # 计算平仓的盈亏比例
+                            gain = ((price - bp['price']) / bp['price'] * 100) if bp['price'] > 0 else 0.0
+                            # 记录配对交易对
+                            paired_trades.append({
+                                "date": f"{bp['date']} → {trade_date}",
+                                "code": stock,
+                                "type": "✅ 已配对交易对",
+                                "price": f"{format_number(bp['price'])} → {format_number(price)}",
+                                "qty": close_qty,
+                                "gain_str": f"{gain:.2f}%",
+                                "gain_val": gain
+                            })
+                            # 更新持仓数量
+                            bp['qty'] -= close_qty
+                            remaining -= close_qty
+                        # 清理已耗尽的正向持仓（数量为0的移除）
+                        buy_positions = [bp for bp in buy_positions if bp['qty'] > 0]
+
+                    # 步骤2：剩余卖出量加入卖空持仓池（无正向持仓时，记为卖空开仓）
+                    if remaining > 0:
+                        sell_positions.append({
+                            'date': trade_date,
+                            'price': price,
+                            'qty': remaining
+                        })
+
+            # 收集未平仓的正向持仓（买入持有）
+            for bp in buy_positions:
+                float_gain = ((now_p - bp['price']) / bp['price'] * 100) if bp['price'] > 0 else 0.0
                 all_active_records.append({
-                    "date": b['date'], 
-                    "code": stock, 
-                    "type": "买入持有", 
-                    "price": b['price'], 
-                    "qty": b['quantity'], 
-                    "gain_str": f"{gain:.2f}%", 
-                    "gain_val": gain
+                    "date": bp['date'],
+                    "code": stock,
+                    "type": "🔴 买入持有",
+                    "price": format_number(bp['price']),
+                    "qty": bp['qty'],
+                    "gain_str": f"{float_gain:.2f}%",
+                    "gain_val": float_gain
                 })
-            for s in [x for x in temp_sells if x['quantity'] > 0]:
-                gain = ((s['price'] - now_p) / s['price'] * 100) if s['price'] > 0 else 0
+
+            # 收集未平仓的卖空持仓（卖空持有）
+            for sp in sell_positions:
+                float_gain = ((sp['price'] - now_p) / sp['price'] * 100) if sp['price'] > 0 else 0.0
                 all_active_records.append({
-                    "date": s['date'], 
-                    "code": stock, 
-                    "type": "卖空持有", 
-                    "price": s['price'], 
-                    "qty": s['quantity'], 
-                    "gain_str": f"{gain:.2f}%", 
-                    "gain_val": gain
+                    "date": sp['date'],
+                    "code": stock,
+                    "type": "🟢 卖空持有",
+                    "price": format_number(sp['price']),
+                    "qty": sp['qty'],
+                    "gain_str": f"{float_gain:.2f}%",
+                    "gain_val": float_gain
                 })
+
+            # 已配对交易对优先显示，拼接到列表头部
+            all_active_records = paired_trades + all_active_records
+            # ---------------------------------------------------------------------------------
        
+        # 显示账户持仓概览
         st.subheader("1️⃣ 账户持仓概览 (手动成本模式)")
         if summary:
+            # 按盈亏比例倒序排序
             summary.sort(key=lambda x: x[5], reverse=True)
-            html = '<table class="custom-table"><thead><tr><th>代码</th><th>净持仓</th><th>手动成本</th><th>现价</th><th>盈亏</th></tr></thead><tbody>'
+            html = '<table class="custom-table"><thead><tr><th>股票代码</th><th>净持仓</th><th>手动成本</th><th>现价</th><th>盈亏比例</th></tr></thead><tbody>'
             for r in summary:
+                # 盈利红色，亏损绿色
                 c_class = "profit-red" if r[5] > 0 else "loss-green" if r[5] < 0 else ""
-                # 这里直接用动态格式化后的结果（r[2]/r[3]已经处理过）
                 html += f'<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td class="{c_class}">{r[4]}</td></tr>'
-            st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
+            html += '</tbody></table>'
+            st.markdown(html, unsafe_allow_html=True)
         else:
-            st.info("目前没有持仓。")
+            st.info("📌 目前账户无任何净持仓")
        
+        # 显示交易配对与未平仓明细
         st.write("---")
-        st.subheader("2️⃣ 多笔未平仓活跃单 (原始成交价追踪)")
+        st.subheader("2️⃣ 交易配对与未平仓单 (严格时间流)")
       
+        # 筛选条件
         with st.expander("🔍 筛选条件", expanded=False):
             col1, col2, col3 = st.columns(3)
-            stock_filter = col1.text_input("股票代码", "")
-            min_gain = col2.number_input("最小盈亏(%)", value=-100.0)
-            max_gain = col3.number_input("最大盈亏(%)", value=100.0)
-            trade_type = st.selectbox("交易类型", ["全部", "买入持有", "卖空持有"])
+            stock_filter = col1.text_input("筛选股票", placeholder="输入股票代码/名称")
+            min_gain = col2.number_input("最小盈亏(%)", value=-100.0, step=0.1)
+            max_gain = col3.number_input("最大盈亏(%)", value=100.0, step=0.1)
+            trade_type = st.selectbox("交易类型筛选", ["全部", "✅ 已配对交易对", "🔴 买入持有", "🟢 卖空持有"], index=0)
       
+        # 应用筛选逻辑
         filtered_records = all_active_records.copy()
         if stock_filter:
             filtered_records = [r for r in filtered_records if stock_filter.lower() in r["code"].lower()]
-        if min_gain != -100 or max_gain != 100:
+        if not (min_gain == -100 and max_gain == 100):
             filtered_records = [r for r in filtered_records if min_gain <= r['gain_val'] <= max_gain]
         if trade_type != "全部":
             filtered_records = [r for r in filtered_records if r["type"] == trade_type]
       
+        # 显示筛选后的明细
         if filtered_records:
-            sort_option = st.selectbox("排序方式", ["盈亏降序", "盈亏升序", "日期降序", "日期升序"])
+            # 排序选项
+            sort_option = st.selectbox("排序方式", ["盈亏降序", "盈亏升序", "日期降序", "日期升序"], index=0)
             if sort_option == "盈亏降序":
                 filtered_records.sort(key=lambda x: x['gain_val'], reverse=True)
             elif sort_option == "盈亏升序":
@@ -236,16 +328,17 @@ if choice == "📊 实时持仓":
             elif sort_option == "日期升序":
                 filtered_records.sort(key=lambda x: x['date'])
           
-            html = '<table class="custom-table"><thead><tr><th>日期</th><th>股票</th><th>类型</th><th>成交单价</th><th>剩余数量</th><th>单笔盈亏</th></tr></thead><tbody>'
+            # 渲染明细表格
+            html = '<table class="custom-table"><thead><tr><th>交易时间</th><th>股票</th><th>交易类型</th><th>成交价格</th><th>数量</th><th>盈亏百分比</th></tr></thead><tbody>'
             for r in filtered_records:
                 c_class = "profit-red" if r['gain_val'] > 0 else "loss-green" if r['gain_val'] < 0 else ""
-                # 修改3：移除:.2f，改用动态格式化函数处理成交单价
-                html += f'<tr><td>{r["date"]}</td><td>{r["code"]}</td><td>{r["type"]}</td><td>{format_number(r["price"])}</td><td>{r["qty"]}</td><td class="{c_class}">{r["gain_str"]}</td></tr>'
-            st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
+                html += f'<tr><td>{r["date"]}</td><td>{r["code"]}</td><td>{r["type"]}</td><td>{r["price"]}</td><td>{r["qty"]}</td><td class="{c_class}">{r["gain_str"]}</td></tr>'
+            html += '</tbody></table>'
+            st.markdown(html, unsafe_allow_html=True)
         else:
-            st.info("没有符合条件的活跃单记录。")
+            st.info("📌 暂无符合条件的交易记录/持仓")
     else:
-        st.info("欢迎使用！请先录入交易。")
+        st.info("📌 交易数据库为空，请先录入交易记录")
 
 # --- 盈利账单 ---
 elif choice == "💰 盈利账单":
