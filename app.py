@@ -17,7 +17,7 @@ except Exception:
     REPO_URL = st.secrets.get("REPO_URL", "")
 
 def sync_db_to_github():
-    """将本地数据库推送到 GitHub"""
+    """将本地数据库推送到 GitHub（兼容Streamlit Cloud）"""
     if not (TOKEN and REPO_URL):
         return
     
@@ -48,9 +48,17 @@ def sync_db_to_github():
 
         if push_info.flags & push_info.ERROR:
             raise Exception(f"Push failed: {push_info.summary}")
+        
+        # 只在本地环境显示成功提示
+        if not os.environ.get("STREAMLIT_CLOUD"):
+            st.toast("✅ 已同步到GitHub", icon="📤")
 
     except Exception as e:
-        st.toast(f"⚠️ GitHub 备份失败: {e}", icon="⚠️")
+        # Streamlit Cloud环境下静默处理，避免Toast错误
+        if not os.environ.get("STREAMLIT_CLOUD"):
+            st.toast(f"⚠️ GitHub 备份失败: {e}", icon="⚠️")
+        # 无论如何记录日志
+        print(f"GitHub备份错误: {e}")
 # ==========================================
 
 
@@ -788,6 +796,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
