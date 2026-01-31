@@ -17,55 +17,50 @@ except Exception:
     REPO_URL = st.secrets.get("REPO_URL", "")
 
 def sync_db_to_github():
-    """优化后的备份逻辑：适配 Streamlit Cloud 权限与 Git 认证"""
+    """彻底修复 exit code(128) 的备份逻辑"""
     if not (TOKEN and REPO_URL):
-        print("未配置 GitHub Token 或 URL，跳过备份")
         return
     
-    # 1. 路径设置：Cloud 环境建议使用 /tmp 目录提高兼容性
-    base_path = pathlib.Path(__file__).parent
-    repo_dir = base_path / ".git_repo"
-    db_path = base_path / "stock_data_v12.db"
-    
     try:
+        # 定义路径
+        base_dir = pathlib.Path(__file__).parent
+        repo_dir = base_dir / ".git_repo"
+        db_name = DB_FILE.name
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        
-        # 2. 初始化或更新仓库
-        if not (repo_dir / ".git").exists():
-            if repo_dir.exists(): shutil.rmtree(repo_dir)
-            repo = Repo.clone_from(auth_url, repo_dir, depth=1)
-        else:
-            repo = Repo(repo_dir)
-            # 确保远程 URL 包含最新的 Token
-            repo.remotes.origin.set_url(auth_url)
-            repo.remotes.origin.pull()
 
-        # 3. 配置 Git 身份（提交必备）
+        # 1. 环境清理：如果文件夹已存在，强制删除以防止状态污染
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir)
+
+        # 2. 深度为1的克隆（快速且干净）
+        repo = Repo.clone_from(auth_url, repo_dir, depth=1)
+
+        # 3. 必须配置用户信息，否则无法 commit
         with repo.config_writer() as cw:
-            cw.set_value("user", "name", "Streamlit Auto Backup")
-            cw.set_value("user", "email", "backup@streamlit.app")
+            cw.set_value("user", "name", "Streamlit_Bot")
+            cw.set_value("user", "email", "bot@example.com")
 
-        # 4. 复制并提交
-        shutil.copy2(db_path, repo_dir / db_path.name)
-        
+        # 4. 覆盖数据库文件
+        shutil.copy2(base_dir / db_name, repo_dir / db_name)
+
+        # 5. 检查变化并推送
         if repo.is_dirty(untracked_files=True):
             repo.git.add(all=True)
-            repo.index.commit(f"auto backup {datetime.now():%Y%m%d-%H%M%S}")
+            repo.index.commit(f"Auto-sync {datetime.now().strftime('%m%d-%H%M')}")
             
-            # 5. 推送（增加强制逻辑防止非快进错误）
+            # 强制推送防止冲突
             origin = repo.remote(name='origin')
             origin.push(force=True)
             
             if not os.environ.get("STREAMLIT_CLOUD"):
-                st.toast("✅ GitHub 备份成功", icon="📤")
+                st.toast("✅ GitHub 同步成功", icon="📤")
         else:
-            print("数据库无变化，跳过备份")
+            print("数据无变动，无需同步")
 
     except Exception as e:
-        error_msg = f"GitHub 备份失败: {str(e)}"
-        print(error_msg)
+        print(f"GitHub备份严重错误: {e}")
         if not os.environ.get("STREAMLIT_CLOUD"):
-            st.toast(error_msg, icon="⚠️")
+            st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
 # ==========================================
 
 
@@ -803,6 +798,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
