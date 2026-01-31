@@ -128,61 +128,57 @@ def auto_sync_github():
     数据修改后自动同步数据库文件到GitHub（适配Streamlit Cloud云端，PAT+HTTPS免密）
     同步结果会在页面右下角弹出提示
     """
-    # 1. 检查秘钥是否配置，未配置直接提示（直接调用全局变量，修复云端兼容）
-    pat = GITHUB_PAT.strip()
-    username = GITHUB_USERNAME.strip()
-    repo_https = GITHUB_REPO_HTTPS.strip()
-    git_email = GIT_USER_EMAIL.strip()
-    if not all([pat, username, repo_https, git_email]):
-        st.toast("⚠️ GitHub同步未配置：请在Streamlit秘钥中填写PAT/用户名/仓库地址/邮箱", icon="⚠️")
-        return
-
-    # 2. 检查数据库文件是否存在
-    db_path = pathlib.Path(__file__).with_name(DB_FILE)
-    if not db_path.exists():
-        st.toast(f"⚠️ 同步失败：数据库文件{DB_FILE}不存在", icon="⚠️")
-        return
-
-    # 3. 构造带PAT的仓库地址（核心：免密推送）
-    pat_repo_https = repo_https.replace("https://", f"https://{username}:{pat}@")
-    # 调试：显示拼接后的仓库地址
-    st.toast(f"拼接后的仓库地址：{pat_repo_https}", icon="ℹ️")
-    local_repo_path = pathlib.Path(__file__).parent.absolute()
-
     try:
-        # 4. 初始化/拉取Git仓库（适配云端首次运行）
-        if (local_repo_path / ".git").exists():
-            # 已有仓库，拉取最新内容（避免冲突）
-            repo = git.Repo(local_repo_path)
-            origin = repo.remote(name="origin")
-            origin.fetch()
-            repo.git.checkout(GIT_BRANCH)
-            # 强制拉取，解决缓存冲突
-            repo.git.pull(origin, GIT_BRANCH, force=True)
-        else:
-            # 首次运行，克隆仓库到本地
-            repo = git.Repo.clone_from(pat_repo_https, local_repo_path, branch=GIT_BRANCH)
-        
-        # 调试：显示当前仓库的远程地址
-        st.toast(f"当前仓库远程地址：{repo.remote('origin').url}", icon="ℹ️")
+        # 1. 检查秘钥是否配置
+        pat = GITHUB_PAT.strip()
+        username = GITHUB_USERNAME.strip()
+        repo_https = GITHUB_REPO_HTTPS.strip()
+        git_email = GIT_USER_EMAIL.strip()
+        if not all([pat, username, repo_https, git_email]):
+            st.toast("⚠️ GitHub同步未配置：请在Streamlit秘钥中填写PAT/用户名/仓库地址/邮箱", icon="⚠️")
+            return
 
-        # 5. 配置Git用户信息（云端必须配置）
+        # 2. 检查数据库文件是否存在
+        db_path = pathlib.Path(__file__).with_name(DB_FILE)
+        if not db_path.exists():
+            st.toast(f"⚠️ 同步失败：数据库文件{DB_FILE}不存在", icon="⚠️")
+            return
+
+        # 3. 构造带PAT的完整仓库地址（必须带.git后缀）
+        if not repo_https.endswith(".git"):
+            repo_https = repo_https + ".git"  # 自动补全.git后缀
+        pat_repo_https = repo_https.replace("https://", f"https://{username}:{pat}@")
+        st.toast(f"✅ 带PAT的完整地址：{pat_repo_https[:60]}...", icon="ℹ️")
+        local_repo_path = pathlib.Path(__file__).parent.absolute()
+
+        # 4. 初始化/重置仓库
+        if (local_repo_path / ".git").exists():
+            repo = git.Repo(local_repo_path)
+            # 强制删除原有远程地址，避免缓存
+            if "origin" in repo.remotes:
+                repo.delete_remote("origin")
+            # 添加新的带PAT的远程地址
+            origin = repo.create_remote("origin", pat_repo_https)
+        else:
+            repo = git.Repo.clone_from(pat_repo_https, local_repo_path, branch=GIT_BRANCH)
+            origin = repo.remote("origin")
+        st.toast(f"✅ 当前远程地址：{origin.url[:60]}...", icon="ℹ️")
+
+        # 5. 拉取最新代码（强制覆盖本地）
+        origin.fetch()
+        repo.git.checkout(GIT_BRANCH)
+        repo.git.reset(f"origin/{GIT_BRANCH}", hard=True)
+
+        # 6. 配置Git用户信息
         repo.config_writer().set_value("user", "name", username).release()
         repo.config_writer().set_value("user", "email", git_email).release()
 
-        # 6. 暂存数据库文件
+        # 7. 暂存并提交
         repo.git.add(str(db_path))
-
-        # 7. 检查是否有变更（避免空提交）
         if repo.is_dirty(untracked_files=True) or repo.index.diff("HEAD"):
-            # 8. 提交代码（备注带时间，方便追溯）
             commit_msg = f"自动同步数据库：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             repo.index.commit(commit_msg)
-
-            # 9. 推送到GitHub
-            origin = repo.remote(name="origin")
-            origin.push(GIT_BRANCH)
-
+            origin.push(GIT_BRANCH, force=True)  # 强制推送，解决冲突
             st.toast("✅ 数据库已自动同步到GitHub", icon="✅")
         else:
             st.toast("ℹ️ 数据库无变更，无需同步", icon="ℹ️")
@@ -191,7 +187,6 @@ def auto_sync_github():
         st.toast(f"❌ Git同步失败：{str(e)[:50]}...", icon="❌")
     except Exception as e:
         st.toast(f"❌ 同步异常：{str(e)[:50]}...", icon="❌")
-
 # --- 侧边栏导航（保留你原有所有菜单）---
 menu = ["📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
 choice = st.sidebar.radio("功能导航", menu)
@@ -717,4 +712,5 @@ with col3:
 
 # 关闭数据库连接
 conn.close()
+
 
