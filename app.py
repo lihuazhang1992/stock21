@@ -17,48 +17,55 @@ except Exception:
     REPO_URL = st.secrets.get("REPO_URL", "")
 
 def sync_db_to_github():
-    """将本地数据库推送到 GitHub（兼容Streamlit Cloud）"""
+    """优化后的备份逻辑：适配 Streamlit Cloud 权限与 Git 认证"""
     if not (TOKEN and REPO_URL):
+        print("未配置 GitHub Token 或 URL，跳过备份")
         return
     
+    # 1. 路径设置：Cloud 环境建议使用 /tmp 目录提高兼容性
+    base_path = pathlib.Path(__file__).parent
+    repo_dir = base_path / ".git_repo"
+    db_path = base_path / "stock_data_v12.db"
+    
     try:
-        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        db_name = DB_FILE.name
-
-        # 初始化仓库（仅首次）
+        
+        # 2. 初始化或更新仓库
         if not (repo_dir / ".git").exists():
-            Repo.clone_from(auth_url, repo_dir, depth=1)
+            if repo_dir.exists(): shutil.rmtree(repo_dir)
+            repo = Repo.clone_from(auth_url, repo_dir, depth=1)
+        else:
+            repo = Repo(repo_dir)
+            # 确保远程 URL 包含最新的 Token
+            repo.remotes.origin.set_url(auth_url)
+            repo.remotes.origin.pull()
+
+        # 3. 配置 Git 身份（提交必备）
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "Streamlit Auto Backup")
+            cw.set_value("user", "email", "backup@streamlit.app")
+
+        # 4. 复制并提交
+        shutil.copy2(db_path, repo_dir / db_path.name)
         
-        repo = Repo(repo_dir)
-        origin = repo.remotes.origin
-
-        # 同步远程状态（避免 push 被拒）
-        origin.fetch()
-        remote_ref = 'main' if 'main' in [ref.name for ref in origin.refs] else 'master'
-        repo.git.reset('--hard', f'origin/{remote_ref}')
-
-        # 复制本地 DB 到仓库
-        shutil.copy2(DB_FILE, repo_dir / db_name)
-
-        # 提交并推送
-        repo.index.add([db_name])
-        repo.index.commit(f"auto backup {datetime.utcnow():%m%d-%H%M}")
-        push_info = origin.push()[0]
-
-        if push_info.flags & push_info.ERROR:
-            raise Exception(f"Push failed: {push_info.summary}")
-        
-        # 只在本地环境显示成功提示
-        if not os.environ.get("STREAMLIT_CLOUD"):
-            st.toast("✅ 已同步到GitHub", icon="📤")
+        if repo.is_dirty(untracked_files=True):
+            repo.git.add(all=True)
+            repo.index.commit(f"auto backup {datetime.now():%Y%m%d-%H%M%S}")
+            
+            # 5. 推送（增加强制逻辑防止非快进错误）
+            origin = repo.remote(name='origin')
+            origin.push(force=True)
+            
+            if not os.environ.get("STREAMLIT_CLOUD"):
+                st.toast("✅ GitHub 备份成功", icon="📤")
+        else:
+            print("数据库无变化，跳过备份")
 
     except Exception as e:
-        # Streamlit Cloud环境下静默处理，避免Toast错误
+        error_msg = f"GitHub 备份失败: {str(e)}"
+        print(error_msg)
         if not os.environ.get("STREAMLIT_CLOUD"):
-            st.toast(f"⚠️ GitHub 备份失败: {e}", icon="⚠️")
-        # 无论如何记录日志
-        print(f"GitHub备份错误: {e}")
+            st.toast(error_msg, icon="⚠️")
 # ==========================================
 
 
@@ -796,6 +803,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
