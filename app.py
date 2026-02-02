@@ -448,87 +448,96 @@ elif choice == "💰 盈利账单":
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
 elif choice == "🎯 价格目标管理":
-    st.header("🎯 价格追踪目标")
+    st.header("🎯 价格目标监控")
 
-    # 1. 基础数据准备
-    # 确保列存在 (base_price 是你的基准价)
-    try:
-        c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
+    # --- 1. 核心：强制重置并确保表结构正确 ---
+    def ensure_table_structure():
+        # 尝试建立新表（如果不存在）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS price_targets (
+                code TEXT PRIMARY KEY,
+                base_price REAL DEFAULT 0.0,
+                buy_target REAL DEFAULT 0.0,
+                is_triggered INTEGER DEFAULT 0,
+                peak_price REAL DEFAULT 0.0,
+                last_updated TEXT
+            )
+        """)
+        # 检查是否缺失 base_price 列（防止旧表干扰）
+        try:
+            c.execute("SELECT base_price FROM price_targets LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
+        conn.commit()
 
-    # 2. 新增监控界面
-    with st.expander("➕ 设定新的价格基准", expanded=False):
+    ensure_table_structure()
+
+    # --- 2. 新增监控表单 ---
+    with st.expander("➕ 设定新基准", expanded=True):
+        # 确保这里能抓到股票列表
         all_stocks = get_dynamic_stock_list()
-        sel_stock = st.selectbox("选择股票", [""] + all_stocks)
-        if sel_stock:
-            # 获取当前实时价格供参考
-            curr_map = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
-            ref_price = curr_map.get(sel_stock, 0.0)
+        if not all_stocks:
+            st.warning("暂无可选股票，请检查数据源")
+        else:
+            sel_stock = st.selectbox("选择股票", ["请选择"] + all_stocks, key="target_add")
             
-            c1, c2 = st.columns(2)
-            u_base = c1.number_input("设定基准价 (成交价)", value=ref_price, step=0.001, format="%.3f")
-            
-            if st.button("开始追踪"):
-                c.execute("INSERT OR REPLACE INTO price_targets (code, base_price) VALUES (?, ?)", (sel_stock, u_base))
-                conn.commit()
-                st.success(f"{sel_stock} 已加入监控")
-                st.rerun()
+            if sel_stock != "请选择":
+                # 获取该股当前价作为默认参考
+                p_map = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
+                current_val = p_map.get(sel_stock, 0.0)
+                
+                col1, col2 = st.columns(2)
+                u_base = col1.number_input("设定基准成交价", value=current_val, format="%.3f")
+                t_percent = col2.number_input("回撤/反弹提醒 (%)", value=2.0, step=0.1)
+                
+                if st.button("🚀 启动监控"):
+                    # 使用 REPLACE 确保唯一性
+                    c.execute("""
+                        INSERT OR REPLACE INTO price_targets (code, base_price, buy_target, is_triggered, peak_price)
+                        VALUES (?, ?, ?, 0, 0.0)
+                    """, (sel_stock, u_base, t_percent))
+                    conn.commit()
+                    st.success(f"{sel_stock} 监控已激活！")
+                    st.rerun()
 
-    # 3. 核心显示逻辑
+    # --- 3. 显示看板 ---
     targets_df = pd.read_sql("SELECT * FROM price_targets", conn)
-    curr_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    current_prices = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
 
     if not targets_df.empty:
-        html_rows = ""
+        st.subheader("📋 当前监控清单")
+        
+        # 遍历每一条记录显示
         for _, row in targets_df.iterrows():
             stock = row['code']
             base = row['base_price']
-            curr = curr_prices.get(stock, 0.0)
+            target_pct = row['buy_target']
+            curr = current_prices.get(stock, 0.0)
             
-            if base > 0:
-                # 计算百分比
-                diff_pct = (curr - base) / base * 100
-                color = "profit-red" if diff_pct >= 0 else "loss-green"
-                icon = "▲" if diff_pct >= 0 else "▼"
+            # 基础数据容器
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 1])
                 
-                # 构造你要求的 HTML 行
-                html_rows += f"""
-                <tr>
-                    <td>{stock}</td>
-                    <td>{base:.3f}</td>
-                    <td>{curr:.3f}</td>
-                    <td class="{color}">{icon} {abs(diff_pct):.2f}%</td>
-                </tr>
-                """
+                c1.write(f"**{stock}**")
+                c1.caption(f"基准: {base:.3f}")
+                
+                c2.metric("当前价", f"{curr:.3f}")
+                
+                # 计算偏离比例 (关键逻辑)
+                if base > 0:
+                    diff = (curr - base) / base * 100
+                    color = "normal" if abs(diff) < target_pct else "inverse"
+                    # 这里用 Streamlit 自己的 metric 避免 HTML 乱码
+                    c3.metric("偏离度", f"{diff:+.2f}%", delta=f"{diff:.2f}%")
+                else:
+                    c3.write("基准价异常")
 
-        # 渲染表格
-        st.markdown(f"""
-            <table class="custom-table">
-                <thead>
-                    <tr>
-                        <th>股票名称</th>
-                        <th>设定基准</th>
-                        <th>实时现价</th>
-                        <th>距离基准</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {html_rows}
-                </tbody>
-            </table>
-        """, unsafe_allow_html=True)
-
-        # 4. 删除管理
-        st.write("")
-        to_del = st.selectbox("移除监控项", [""] + targets_df['code'].tolist())
-        if st.button("确认移除") and to_del:
-            c.execute("DELETE FROM price_targets WHERE code=?", (to_del,))
-            conn.commit()
-            st.rerun()
+                if c4.button("🗑️ 移除", key=f"del_{stock}"):
+                    c.execute("DELETE FROM price_targets WHERE code=?", (stock,))
+                    conn.commit()
+                    st.rerun()
     else:
-        st.info("暂无监控数据")
+        st.info("暂无监控项，请点击上方展开添加。")
 
 
 
@@ -799,6 +808,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
