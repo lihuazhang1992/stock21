@@ -495,7 +495,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS signals (
     high_date TEXT,low_date TEXT
 )''')
 conn.commit() # 关键：提交修改
-    signal_data = pd.read_sql("""
+signal_data = pd.read_sql("""
         SELECT code, high_point, low_point, high_down_pct, high_up_pct, low_up_pct, low_down_pct 
         FROM signals
     """, conn)
@@ -906,6 +906,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
