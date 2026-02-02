@@ -483,6 +483,14 @@ elif choice == "🎯 价格目标管理":
     price_data = pd.read_sql("SELECT code, current_price FROM prices", conn)
     price_dict = dict(zip(price_data['code'], price_data['current_price']))
     # 读取信号配置（监控价 + 4个幅度参数）
+    # 强制修复signals表结构（贴到报错的pd.read_sql上面）
+c.execute('''CREATE TABLE IF NOT EXISTS signals (
+    code TEXT PRIMARY KEY,high_point REAL,low_point REAL,
+    high_down_pct REAL DEFAULT 0.0,high_up_pct REAL DEFAULT 0.0,
+    low_up_pct REAL DEFAULT 0.0,low_down_pct REAL DEFAULT 0.0,
+    high_date TEXT,low_date TEXT
+)''')
+conn.commit() # 关键：提交修改
     signal_data = pd.read_sql("""
         SELECT code, high_point, low_point, high_down_pct, high_up_pct, low_up_pct, low_down_pct 
         FROM signals
@@ -894,6 +902,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
