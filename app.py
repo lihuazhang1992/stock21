@@ -450,95 +450,98 @@ elif choice == "💰 盈利账单":
 elif choice == "🎯 价格目标管理":
     st.header("🎯 价格目标监控")
 
-    # --- 1. 核心：强制重置并确保表结构正确 ---
-    def ensure_table_structure():
-        # 尝试建立新表（如果不存在）
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS price_targets (
-                code TEXT PRIMARY KEY,
-                base_price REAL DEFAULT 0.0,
-                buy_target REAL DEFAULT 0.0,
-                is_triggered INTEGER DEFAULT 0,
-                peak_price REAL DEFAULT 0.0,
-                last_updated TEXT
-            )
-        """)
-        # 检查是否缺失 base_price 列（防止旧表干扰）
-        try:
-            c.execute("SELECT base_price FROM price_targets LIMIT 1")
-        except sqlite3.OperationalError:
-            c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
-        conn.commit()
+    # 1. 确保数据库列：base_price(成交/成本价), buy_target(目标触发价)
+    try:
+        c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
+        c.execute("ALTER TABLE price_targets ADD COLUMN buy_target REAL DEFAULT 0.0")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
 
-    ensure_table_structure()
-
-    # --- 2. 新增监控表单 ---
-    with st.expander("➕ 设定新基准", expanded=True):
-        # 确保这里能抓到股票列表
+    # 2. 录入界面：设定你的买入/卖出目标
+    with st.expander("➕ 设定交易目标", expanded=True):
         all_stocks = get_dynamic_stock_list()
-        if not all_stocks:
-            st.warning("暂无可选股票，请检查数据源")
-        else:
-            sel_stock = st.selectbox("选择股票", ["请选择"] + all_stocks, key="target_add")
+        sel_stock = st.selectbox("选择股票", ["请选择"] + all_stocks, key="target_add_v3")
+        
+        if sel_stock != "请选择":
+            p_map = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
+            curr_v = p_map.get(sel_stock, 0.0)
             
-            if sel_stock != "请选择":
-                # 获取该股当前价作为默认参考
-                p_map = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
-                current_val = p_map.get(sel_stock, 0.0)
-                
-                col1, col2 = st.columns(2)
-                u_base = col1.number_input("设定基准成交价", value=current_val, format="%.3f")
-                t_percent = col2.number_input("回撤/反弹提醒 (%)", value=2.0, step=0.1)
-                
-                if st.button("🚀 启动监控"):
-                    # 使用 REPLACE 确保唯一性
-                    c.execute("""
-                        INSERT OR REPLACE INTO price_targets (code, base_price, buy_target, is_triggered, peak_price)
-                        VALUES (?, ?, ?, 0, 0.0)
-                    """, (sel_stock, u_base, t_percent))
-                    conn.commit()
-                    st.success(f"{sel_stock} 监控已激活！")
-                    st.rerun()
+            st.info(f"💡 {sel_stock} 当前现价: **{curr_v:.3f}**")
+            
+            col1, col2 = st.columns(2)
+            u_base = col1.number_input("我的成本/基准价", value=curr_v, format="%.3f", help="你的买入成本或当前的参考基准")
+            u_target = col2.number_input("我的目标买入/卖出价", value=curr_v * 1.05, format="%.3f", help="你想在哪一个价格执行交易")
+            
+            if st.button("🚀 加入目标追踪"):
+                c.execute("INSERT OR REPLACE INTO price_targets (code, base_price, buy_target) VALUES (?, ?, ?)",
+                          (sel_stock, u_base, u_target))
+                conn.commit()
+                st.success(f"已开始追踪 {sel_stock} 的目标价")
+                st.rerun()
 
-    # --- 3. 显示看板 ---
+    # 3. 监控显示逻辑
     targets_df = pd.read_sql("SELECT * FROM price_targets", conn)
     current_prices = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
 
     if not targets_df.empty:
-        st.subheader("📋 当前监控清单")
-        
-        # 遍历每一条记录显示
+        # 使用你喜欢的 HTML 表格风格
+        html_rows = ""
         for _, row in targets_df.iterrows():
             stock = row['code']
-            base = row['base_price']
-            target_pct = row['buy_target']
+            base = row['base_price'] or 0.0
+            target = row['buy_target'] or 0.0
             curr = current_prices.get(stock, 0.0)
             
-            # 基础数据容器
-            with st.container(border=True):
-                c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 1])
+            if curr > 0 and target > 0:
+                # 逻辑核心：计算现价距离目标的幅度
+                # 公式：(目标价 - 现价) / 现价
+                dist_to_target = (target - curr) / curr * 100
                 
-                c1.write(f"**{stock}**")
-                c1.caption(f"基准: {base:.3f}")
+                # 盈亏计算：(现价 - 成本价) / 成本价
+                profit_ratio = (curr - base) / base * 100 if base > 0 else 0
                 
-                c2.metric("当前价", f"{curr:.3f}")
+                color_profit = "profit-red" if profit_ratio >= 0 else "loss-green"
+                # 距离目标价的提示：如果是正数，说明还要涨这么多才到；负数说明还要跌这么多
+                target_direction = "需涨" if dist_to_target > 0 else "需跌"
                 
-                # 计算偏离比例 (关键逻辑)
-                if base > 0:
-                    diff = (curr - base) / base * 100
-                    color = "normal" if abs(diff) < target_pct else "inverse"
-                    # 这里用 Streamlit 自己的 metric 避免 HTML 乱码
-                    c3.metric("偏离度", f"{diff:+.2f}%", delta=f"{diff:.2f}%")
-                else:
-                    c3.write("基准价异常")
+                html_rows += f"""
+                <tr>
+                    <td><b>{stock}</b></td>
+                    <td>{base:.3f}</td>
+                    <td class="{color_profit}">{profit_ratio:+.2f}%</td>
+                    <td style="color:#1E88E5;">{target:.3f}</td>
+                    <td style="font-weight:bold;">{target_direction} {abs(dist_to_target):.2f}%</td>
+                </tr>
+                """
 
-                if c4.button("🗑️ 移除", key=f"del_{stock}"):
-                    c.execute("DELETE FROM price_targets WHERE code=?", (stock,))
-                    conn.commit()
-                    st.rerun()
+        st.markdown(f"""
+            <table class="custom-table">
+                <thead>
+                    <tr>
+                        <th>股票</th>
+                        <th>成本价</th>
+                        <th>当前盈亏</th>
+                        <th>目标价</th>
+                        <th>距离目标</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {html_rows}
+                </tbody>
+            </table>
+        """, unsafe_allow_html=True)
+
+        # 4. 删除管理
+        with st.expander("🗑️ 移除追踪"):
+            to_del = st.multiselect("选择要删除的股票", targets_df['code'].tolist())
+            if st.button("确认移除"):
+                for s in to_del:
+                    c.execute("DELETE FROM price_targets WHERE code=?", (s,))
+                conn.commit()
+                st.rerun()
     else:
-        st.info("暂无监控项，请点击上方展开添加。")
-
+        st.info("尚未设定任何目标价格。")
 
 
 
@@ -808,6 +811,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
