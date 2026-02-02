@@ -447,33 +447,85 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-# 反弹买/回落卖 价格目标管理（完整分支，缩进已调好，直接贴）
+# 🎯 反弹买/回落卖 价格目标管理（完整无错版+价格状态标签）
 elif choice == "🎯 价格目标管理":
     st.header("🎯 反弹买 & 回落卖 管理")
-    st.subheader("核心逻辑：")
+    st.subheader("核心交易逻辑：")
     st.markdown("""
-    #### 买入价：监控最高价 → 下跌指定幅度 → 再反弹指定幅度
+    #### ✅ 买入价（盯监控最高价）
+    监控最高价 → 下跌指定幅度 → 再反弹指定幅度 → 触发买入
     `买入价 = 监控最高价 × (1 - 最高价下跌幅度%) × (1 + 最高价反弹幅度%)`
-    #### 卖出价：监控最低价 → 反弹指定幅度 → 再回落指定幅度
+    #### ❌ 卖出价（盯监控最低价）
+    监控最低价 → 反弹指定幅度 → 再回落指定幅度 → 触发卖出
     `卖出价 = 监控最低价 × (1 + 最低价反弹幅度%) × (1 - 最低价回落幅度%)`
-    ⚠️ 价格突破监控价后，手动在配置里更新即可！
+    ⚠️ 价格突破「监控最高价/最低价」后，手动在配置面板更新即可！
     """)
 
-    # 工具函数：计算距现价百分比
+    # 工具函数1：计算目标价距现价的百分比（保留2位小数）
     def calc_percent(target, current):
         if current == 0 or pd.isna(current) or pd.isna(target):
             return "0.00%"
         percent = ((target - current) / current) * 100
         return f"{percent:.2f}%"
 
-    # 工具函数：格式化价格（去末尾0）
+    # 工具函数2：格式化价格（去除末尾无意义0，如100.00→100，12.50→12.5）
     def format_num(num):
         if pd.isna(num) or num is None or num == 0:
             return "0"
         num_str = f"{num}"
         return num_str.rstrip('0').rstrip('.') if '.' in num_str else num_str
 
-    # ========== 数据库终极修复：加缺失字段（放在查询前，绝对生效）==========
+    # 工具函数3：核心-判断价格当前阶段（彩色状态标签用，区分突破/回落/待反弹）
+    def get_price_status(current, high_point, low_point, high_down, high_up, low_up, low_down):
+        # 未配置任何监控价，返回灰色提示
+        if high_point == 0 and low_point == 0:
+            return "未配置监控价\n请先去面板设置", "#888888"
+        # 计算关键阈值：最高价下跌阈值、最低价反弹阈值（状态判断的核心依据）
+        high_down_threshold = high_point * (1 - high_down/100) if high_point > 0 else 0
+        low_up_threshold = low_point * (1 + low_up/100) if low_point > 0 else 0
+
+        # ===== 监控最高价（买入逻辑）的状态判断 =====
+        if high_point > 0:
+            if current > high_point:
+                high_status = "📈 正在突破最高价"
+                high_color = "#e53e3e"  # 红色：突破中
+            elif current < high_down_threshold:
+                high_status = "📉 回落超阈值→待反弹"
+                high_color = "#3182ce"  # 蓝色：可等反弹
+            elif high_down_threshold <= current < high_point:
+                high_status = "⚠️ 突破后回落中"
+                high_color = "#dd6b20"  # 橙色：回落阶段
+            else:
+                high_status = "✅ 价格低于最高价"
+                high_color = "#38a169"  # 绿色：正常
+        else:
+            high_status = "❓ 未配置最高价"
+            high_color = "#888888"  # 灰色：未配置
+
+        # ===== 监控最低价（卖出逻辑）的状态判断 =====
+        if low_point > 0:
+            if current < low_point:
+                low_status = "📉 正在突破最低价"
+                low_color = "#e53e3e"  # 红色：突破中
+            elif current > low_up_threshold:
+                low_status = "📈 反弹超阈值→待回落"
+                low_color = "#3182ce"  # 蓝色：可等回落
+            elif low_point < current <= low_up_threshold:
+                low_status = "⚠️ 突破后反弹中"
+                low_color = "#dd6b20"  # 橙色：反弹阶段
+            else:
+                low_status = "✅ 价格高于最低价"
+                low_color = "#38a169"  # 绿色：正常
+        else:
+            low_status = "❓ 未配置最低价"
+            low_color = "#888888"  # 灰色：未配置
+
+        # 拼接最终状态，主颜色取有配置的一方（优先最高价）
+        final_status = f"{high_status}\n{low_status}"
+        main_color = high_color if high_point > 0 else low_color
+        return final_status, main_color
+
+    # ========== 数据库终极修复：查询前强制加缺失字段（绝对生效，避免报错）==========
     add_fields = [
         "ALTER TABLE signals ADD COLUMN high_down_pct REAL DEFAULT 0.0",
         "ALTER TABLE signals ADD COLUMN high_up_pct REAL DEFAULT 0.0",
@@ -484,22 +536,21 @@ elif choice == "🎯 价格目标管理":
         try:
             c.execute(sql)
         except:
-            pass
-    conn.commit()
-    # ================================================================
+            pass  # 字段已存在则跳过，不报错
+    conn.commit()  # 提交表结构修改，必须有！
 
     # 1. 获取基础数据
-    stock_list = get_dynamic_stock_list()  # 你的动态股票列表函数
-    price_data = pd.read_sql("SELECT code, current_price FROM prices", conn)
-    price_dict = dict(zip(price_data['code'], price_data['current_price']))
+    stock_list = get_dynamic_stock_list()  # 你的动态股票列表函数（无需修改）
+    price_data = pd.read_sql("SELECT code, current_price FROM prices", conn)  # 读取股票现价
+    price_dict = dict(zip(price_data['code'], price_data['current_price']))  # 转字典方便取值
 
-    # 2. 数据库查询（无缩进/字段错误）
+    # 2. 读取信号配置数据（监控价+4个幅度参数）
     signal_data = pd.read_sql(
         "SELECT code, high_point, low_point, high_down_pct, high_up_pct, low_up_pct, low_down_pct FROM signals",
         conn
     )
 
-    # 3. 整理信号数据
+    # 3. 整理配置数据为字典，方便按股票代码取值
     signal_dict = {}
     for _, row in signal_data.iterrows():
         signal_dict[row['code']] = {
@@ -511,57 +562,77 @@ elif choice == "🎯 价格目标管理":
             "low_down": row['low_down_pct'] or 0.0
         }
 
-    # 4. 逐个股票展示&配置
+    # 4. 逐个股票展示：配置面板+核心价格+彩色状态标签
     for stock in stock_list:
-        st.write("---")
-        current_price = price_dict.get(stock, 0.0)
+        st.write("---")  # 分割线，区分不同股票
+        # 获取当前股票的基础数据
+        current_price = price_dict.get(stock, 0.0)  # 股票现价
+        # 无配置时默认赋值0，避免报错
         sig = signal_dict.get(stock, {"high":0, "low":0, "high_down":0, "high_up":0, "low_up":0, "low_down":0})
         high_point, low_point = sig["high"], sig["low"]
         high_down, high_up = sig["high_down"], sig["high_up"]
         low_up, low_down = sig["low_up"], sig["low_down"]
 
-        # 后台配置（折叠）
-        with st.expander(f"⚙️ {stock} 配置", expanded=False):
-            st.write("📈 买入价参数（监控最高价+下跌+反弹）")
+        # 🔧 后台配置面板（折叠隐藏，不占主界面）
+        with st.expander(f"⚙️ {stock} 配置面板", expanded=False):
+            st.write("### 📈 买入价参数（盯监控最高价）")
             col1, col2, col3 = st.columns(3)
             new_high = col1.number_input(f"监控最高价", value=float(high_point), key=f"high_{stock}", step=0.0001)
             new_high_down = col2.number_input(f"最高价下跌幅度(%)", value=float(high_down), key=f"hd_{stock}", step=0.1)
             new_high_up = col3.number_input(f"最高价反弹幅度(%)", value=float(high_up), key=f"hu_{stock}", step=0.1)
 
-            st.write("📉 卖出价参数（监控最低价+反弹+回落）")
+            st.write("### 📉 卖出价参数（盯监控最低价）")
             col4, col5, col6 = st.columns(3)
             new_low = col4.number_input(f"监控最低价", value=float(low_point), key=f"low_{stock}", step=0.0001)
             new_low_up = col5.number_input(f"最低价反弹幅度(%)", value=float(low_up), key=f"lu_{stock}", step=0.1)
             new_low_down = col6.number_input(f"最低价回落幅度(%)", value=float(low_down), key=f"ld_{stock}", step=0.1)
 
-            if st.button(f"💾 保存{stock}", key=f"save_{stock}"):
+            # 📊 新增：阈值参考价（实时计算，不用自己算关键点位）
+            st.write("### 📌 关键阈值参考（实时更新）")
+            high_down_ref = new_high * (1 - new_high_down/100) if new_high > 0 else 0
+            low_up_ref = new_low * (1 + new_low_up/100) if new_low > 0 else 0
+            col_ref1, col_ref2 = st.columns(2)
+            col_ref1.metric("最高价下跌阈值", format_num(high_down_ref))  # 跌到这个价算回落到位
+            col_ref2.metric("最低价反弹阈值", format_num(low_up_ref))  # 弹到这个价算反弹到位
+
+            # 💾 保存配置按钮（独立保存，避免批量错误）
+            if st.button(f"💾 保存{stock}配置", key=f"save_{stock}"):
                 c.execute("""
                     INSERT OR REPLACE INTO signals (code, high_point, low_point, high_down_pct, high_up_pct, low_up_pct, low_down_pct)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (stock, new_high, new_low, new_high_down, new_high_up, new_low_up, new_low_down))
                 conn.commit()
-                st.toast(f"✅ {stock} 配置保存成功")
+                st.toast(f"✅ {stock} 配置保存成功！", icon="💾")
 
-        # 核心计算
+        # 🧮 核心价格计算（严格按你的交易逻辑，无任何修改）
         buy_price = high_point * (1 - high_down/100) * (1 + high_up/100) if high_point > 0 else 0.0
         sell_price = low_point * (1 + low_up/100) * (1 - low_down/100) if low_point > 0 else 0.0
 
-        # 前端展示（只显现价、买入价、卖出价+百分比）
+        # 🖥️ 前端核心展示（现价+买入价+卖出价+彩色状态标签）
         col1, col2, col3, col4 = st.columns(4)
+        # 列1：股票现价
         col1.metric(f"{stock} 现价", format_num(current_price))
+        # 列2：买入价 + 距现价百分比
         col2.metric("✅ 买入价", format_num(buy_price), delta=calc_percent(buy_price, current_price))
+        # 列3：卖出价 + 距现价百分比
         col3.metric("❌ 卖出价", format_num(sell_price), delta=calc_percent(sell_price, current_price))
+        # 列4：彩色价格阶段状态标签（核心新增，一眼看状态）
+        status_text, status_color = get_price_status(current_price, high_point, low_point, high_down, high_up, low_up, low_down)
+        col4.markdown(f"""
+        <div style='margin-top:28px; padding:12px; background-color:{status_color}20;
+                    border:1px solid {status_color}; border-radius:8px; color:{status_color}; font-weight:600; line-height:1.6;'>
+        {status_text}
+        </div>
+        """, unsafe_allow_html=True)
 
-        # 突破提示
-        hint = ""
-        if current_price > high_point and high_point > 0:
-            hint = "⚠️ 突破最高价\n请手动更新！"
-        elif current_price < low_point and low_point > 0:
-            hint = "⚠️ 突破最低价\n请手动更新！"
-        col4.markdown(f"<div style='margin-top:28px;'>{hint}</div>", unsafe_allow_html=True)
-
-    st.info("📌 提示：幅度输入数字即百分比（如5=5%），突破监控价后在配置里手动更新")
-
+    # 📌 全局操作提示（放在最后，方便查看）
+    st.info("""
+    🔍 操作提示：
+    1. 幅度参数直接输入数字（如5=5%，0.5=0.5%）；
+    2. 价格突破监控价后，及时在「配置面板」更新监控最高价/最低价；
+    3. 蓝色状态标签代表「已到关键阈值」，可盯盘等待买入/卖出价触发；
+    4. 红色状态标签代表「正在突破」，需等待价格回落/反弹后再判断。
+    """)
 
 
 
@@ -831,6 +902,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
