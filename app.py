@@ -450,109 +450,92 @@ elif choice == "💰 盈利账单":
 elif choice == "🎯 价格目标管理":
     st.header("🎯 价格目标监控 (买入/卖出对比)")
 
-    # --- 1. 确保数据库列完整 ---
-    def sync_target_db():
-        # 我们使用 base_price 存储成交价，buy_target 存储预警比例
-        cols = {
-            "base_price": "REAL DEFAULT 0.0", 
-            "buy_target": "REAL DEFAULT 0.0"
-        }
-        for col, dtype in cols.items():
-            try:
-                c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-    sync_target_db()
+    # 1. 确保数据库结构 (base_price: 基准, buy_target: 预警阈值)
+    try:
+        c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
+        c.execute("ALTER TABLE price_targets ADD COLUMN buy_target REAL DEFAULT 0.0")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
 
-    # --- 2. 录入监控目标 ---
-    with st.expander("➕ 添加买入/卖出价格监控", expanded=False):
+    # 2. 录入表单
+    with st.expander("➕ 添加新监控", expanded=False):
         all_stocks = get_dynamic_stock_list()
-        sel_stock = st.selectbox("选择股票", [""] + all_stocks, key="target_reg")
+        sel_stock = st.selectbox("选择股票", [""] + all_stocks, key="target_add_box")
         
         if sel_stock:
-            curr_p = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}.get(sel_stock, 0.0)
+            prices_map = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+            curr_p = prices_map.get(sel_stock, 0.0)
             
             col1, col2 = st.columns(2)
-            b_price = col1.number_input("成交单价 (买入或卖出价)", value=curr_p if curr_p > 0 else 0.0, step=0.001, format="%.3f")
-            t_percent = col2.number_input("预警偏离幅度 (%)", value=5.0, step=0.1)
+            b_price = col1.number_input("基准价格 (买入/卖出价)", value=curr_p, step=0.001, format="%.3f")
+            t_percent = col2.number_input("预警阈值 (%)", value=5.0, step=0.1)
             
-            if st.button("开始监控"):
-                if b_price > 0:
-                    # 覆盖旧的监控记录
-                    c.execute("INSERT OR REPLACE INTO price_targets (code, base_price, buy_target) VALUES (?, ?, ?)",
-                              (sel_stock, b_price, t_percent))
-                    conn.commit()
-                    threading.Thread(target=sync_db_to_github, daemon=True).start()
-                    st.success(f"已开始监控 {sel_stock}")
-                    st.rerun()
-                else:
-                    st.error("价格必须大于0")
+            if st.button("加入监控清单"):
+                c.execute("INSERT OR REPLACE INTO price_targets (code, base_price, buy_target) VALUES (?, ?, ?)",
+                          (sel_stock, b_price, t_percent))
+                conn.commit()
+                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                st.success(f"已开始监控 {sel_stock}")
+                st.rerun()
 
-    # --- 3. 监控显示列表 ---
+    # 3. 数据处理与表格展示
     targets_df = pd.read_sql("SELECT * FROM price_targets", conn)
-    curr_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    current_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
 
     if not targets_df.empty:
-        # 使用 HTML 表格美化显示，更直观
-        html = """
-        <table class="custom-table">
-            <thead>
-                <tr>
-                    <th>股票名称</th>
-                    <th>成交基准价</th>
-                    <th>实时现价</th>
-                    <th>距基准涨跌幅</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody>
-        """
-        
+        # 构造美化的 HTML 表格
+        html_rows = ""
         for _, row in targets_df.iterrows():
             stock = row['code']
-            base = row['base_price']
-            alert_limit = row['buy_target']
-            curr = curr_prices.get(stock, 0.0)
+            base = row['base_price'] or 0.0
+            curr = current_prices.get(stock, 0.0)
+            alert_limit = row['buy_target'] or 5.0
             
-            if base > 0 and curr > 0:
-                # 计算比例：(现价 - 基准价) / 基准价
+            if base > 0:
                 diff_ratio = (curr - base) / base * 100
-                
-                # 颜色逻辑：涨了红色，跌了绿色
                 color_class = "profit-red" if diff_ratio >= 0 else "loss-green"
                 arrow = "▲" if diff_ratio >= 0 else "▼"
+                # 超过阈值时显示加粗提醒
+                alert_style = "font-weight:bold; background-color: rgba(211, 47, 47, 0.1);" if abs(diff_ratio) >= alert_limit else ""
                 
-                # 如果超过了设定的预警比例，加粗显示
-                weight_style = "font-weight:bold; font-size:1.2em;" if abs(diff_ratio) >= alert_limit else ""
-                
-                html += f"""
+                html_rows += f"""
                 <tr>
                     <td>{stock}</td>
                     <td>{base:.3f}</td>
                     <td>{curr:.3f}</td>
-                    <td class="{color_class}" style="{weight_style}">{arrow} {diff_ratio:.2f}%</td>
-                    <td>
-                        <form action="/" method="get">
-                            <input type="hidden" name="del_id" value="{stock}">
-                        </form>
-                    </td>
+                    <td class="{color_class}" style="{alert_style}">{arrow} {diff_ratio:.2f}%</td>
                 </tr>
                 """
-        html += "</tbody></table>"
-        st.markdown(html, unsafe_allow_html=True)
 
-        # 这里的删除按钮使用 Streamlit 原生组件（HTML里做按钮比较复杂）
-        st.write("---")
-        del_col1, del_col2 = st.columns([3, 1])
-        to_del = del_col1.selectbox("选择要移除的监控", [""] + targets_df['code'].tolist())
-        if del_col2.button("🗑️ 移除监控") and to_del:
-            c.execute("DELETE FROM price_targets WHERE code=?", (to_del,))
-            conn.commit()
-            st.rerun()
+        st.markdown(f"""
+            <table class="custom-table">
+                <thead>
+                    <tr>
+                        <th>股票名称</th>
+                        <th>成交基准价</th>
+                        <th>实时现价</th>
+                        <th>距离基准</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {html_rows}
+                </tbody>
+            </table>
+        """, unsafe_allow_html=True)
 
+        # 4. 简洁的删除区域
+        st.write("")
+        with st.expander("🗑️ 管理监控列表"):
+            to_del = st.multiselect("选择要移除的股票", options=targets_df['code'].tolist())
+            if st.button("确认删除选中项"):
+                for s in to_del:
+                    c.execute("DELETE FROM price_targets WHERE code=?", (s,))
+                conn.commit()
+                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                st.rerun()
     else:
-        st.info("当前没有设定价格监控目标。")
+        st.info("💡 暂无监控目标。请在上方点击“添加新监控”开始。")
 
 
 
@@ -823,6 +806,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
