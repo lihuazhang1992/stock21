@@ -451,7 +451,23 @@ elif choice == "🎯 价格目标管理":
     st.header("🎯 价格目标管理（手动模式）")
     st.info("💡 操作指南：当发现突破发生时，手动在配置面板切换「行情阶段」，系统将开始计算回落/反弹幅度。")
 
-    # 1. 数据库升级：确保字段齐全
+    # --- 🛠️ 核心工具函数 (必须定义在调用之前) ---
+    def calc_percent(target, current):
+        if current == 0 or pd.isna(current) or pd.isna(target) or target == 0:
+            return None # 修改为 None，方便 metric 组件自动处理
+        percent = ((target - current) / current) * 100
+        return f"{percent:.2f}%"
+
+    def format_num(num, trigger=False):
+        if trigger and (num == 0 or num is None):
+            return "未激活"
+        if pd.isna(num) or num is None or num == 0:
+            return "0"
+        num_str = f"{num}"
+        # 去除末尾多余的0
+        return num_str.rstrip('0').rstrip('.') if '.' in num_str else num_str
+
+    # --- 1. 数据库升级：确保字段齐全 ---
     add_fields = [
         "ALTER TABLE signals ADD COLUMN high_point REAL DEFAULT 0.0",
         "ALTER TABLE signals ADD COLUMN low_point REAL DEFAULT 0.0",
@@ -466,11 +482,13 @@ elif choice == "🎯 价格目标管理":
             pass
     conn.commit()
 
-    # 2. 获取数据
+    # --- 2. 获取数据 ---
     stock_list = get_dynamic_stock_list()
+    # 确保从价格表获取最新价
     price_data = pd.read_sql("SELECT code, current_price FROM prices", conn)
     price_dict = dict(zip(price_data['code'], price_data['current_price']))
     
+    # 获取信号配置表
     signal_data = pd.read_sql("SELECT * FROM signals", conn)
 
     for stock in stock_list:
@@ -489,17 +507,16 @@ elif choice == "🎯 价格目标管理":
         else:
             curr_stage, h_mon, l_mon, h_down, l_up = "等待中", 0.0, 0.0, 0.0, 0.0
 
-        # 🔧 侧边配置面板
+        # --- 🔧 侧边配置面板 ---
         with st.expander(f"⚙️ {stock} 配置面板 (当前：{curr_stage})", expanded=False):
             # 手动选择状态
             stage_options = ["等待中", "📈 上升中", "📉 下降中", "🔔 突破高价-回落卖出", "🔔 跌破低价-反弹买入"]
-            # 兼容性处理，防止索引报错
             try:
                 s_idx = stage_options.index(curr_stage)
             except:
                 s_idx = 0
                 
-            new_stage = st.selectbox("当前行情阶段", stage_options, index=s_idx, key=f"st_{stock}")
+            new_stage = st.selectbox("🚦 当前行情阶段", stage_options, index=s_idx, key=f"st_{stock}")
             
             col_a, col_b = st.columns(2)
             new_h = col_a.number_input("上涨监控价", value=float(h_mon), key=f"h_{stock}", step=0.001)
@@ -509,7 +526,7 @@ elif choice == "🎯 价格目标管理":
             new_l = col_c.number_input("下跌监控价", value=float(l_mon), key=f"l_{stock}", step=0.001)
             new_lu = col_d.number_input("监控反弹幅度%", value=float(l_up), key=f"lu_{stock}", step=0.1)
 
-            if st.button(f"💾 保存并锁定状态", key=f"save_{stock}"):
+            if st.button(f"💾 保存并锁定阶段", key=f"save_{stock}"):
                 c.execute("""
                     INSERT OR REPLACE INTO signals (code, high_point, low_point, high_down_pct, low_up_pct, market_stage)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -517,9 +534,9 @@ elif choice == "🎯 价格目标管理":
                 conn.commit()
                 st.rerun()
 
-        # 🧮 逻辑计算
+        # --- 🧮 逻辑计算 ---
         status_text = f"状态：{curr_stage}"
-        status_color = "#888888" # 灰色
+        status_color = "#888888" # 默认灰色
         sell_p, buy_p = 0.0, 0.0
 
         if curr_stage == "🔔 突破高价-回落卖出" and h_mon > 0:
@@ -545,24 +562,28 @@ elif choice == "🎯 价格目标管理":
         elif "上升" in curr_stage: status_color = "#e53e3e" # 红色
         elif "下降" in curr_stage: status_color = "#3182ce" # 蓝色
 
-        # 🖥️ 前端展示
+        # --- 🖥️ 前端展示 ---
         c1, c2, c3, c4 = st.columns(4)
         c1.metric(f"{stock} 现价", format_num(current_price))
         
-        # 买入/卖出目标价展示
-        b_label = format_num(buy_p) if buy_p > 0 else "未激活"
-        c2.metric("🎯 目标买入价", b_label, delta=calc_percent(buy_p, current_price) if buy_p > 0 else None)
+        # 目标买入价显示
+        b_label = format_num(buy_p, trigger=True)
+        c2.metric("🎯 目标买入价", b_label, delta=calc_percent(buy_p, current_price))
         
-        s_label = format_num(sell_p) if sell_p > 0 else "未激活"
-        c3.metric("🎯 目标卖出价", s_label, delta=calc_percent(sell_p, current_price) if sell_p > 0 else None)
+        # 目标卖出价显示
+        s_label = format_num(sell_p, trigger=True)
+        c3.metric("🎯 目标卖出价", s_label, delta=calc_percent(sell_p, current_price))
         
-        # 状态标签
+        # 状态彩色标签
         c4.markdown(f"""
             <div style='margin-top:28px; padding:12px; background-color:{status_color}20;
                         border:1px solid {status_color}; border-radius:8px; color:{status_color}; font-weight:600; text-align:center;'>
             {status_text}
             </div>
-        """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)True)
+
+
+
 
 # --- 买卖信号 ---
 elif choice == "🔔 买卖信号":
@@ -795,6 +816,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
