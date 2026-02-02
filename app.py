@@ -447,102 +447,76 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-elif choice == "🎯 价格目标管理":
-    st.header("🎯 价格目标监控")
+# --- 3. 显示看板 ---
+targets_df = pd.read_sql("SELECT * FROM price_targets", conn)
+current_prices = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
 
-    # 1. 确保数据库列：base_price(成交/成本价), buy_target(目标触发价)
-    try:
-        c.execute("ALTER TABLE price_targets ADD COLUMN base_price REAL DEFAULT 0.0")
-        c.execute("ALTER TABLE price_targets ADD COLUMN buy_target REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
+if not targets_df.empty:
+    st.subheader("📋 当前价格目标监控")
 
-    # 2. 录入界面：设定你的买入/卖出目标
-    with st.expander("➕ 设定交易目标", expanded=True):
-        all_stocks = get_dynamic_stock_list()
-        sel_stock = st.selectbox("选择股票", ["请选择"] + all_stocks, key="target_add_v3")
-        
-        if sel_stock != "请选择":
-            p_map = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
-            curr_v = p_map.get(sel_stock, 0.0)
+    for _, row in targets_df.iterrows():
+        stock = row['code']
+        base = row['base_price']
+        alert_pct = row['buy_target']      # 这里其实是警戒百分比（可正可负，但你目前都存正数）
+        curr = current_prices.get(stock, 0.0)
+        triggered = row['is_triggered']
+
+        if base <= 0:
+            st.warning(f"{stock} 基准价异常，请重新设定")
+            continue
+
+        # ─────────────── 计算两个关键价格 ───────────────
+        # 假设 buy_target 字段存的是「正数百分比」，代表双向偏离幅度
+        rebound_target_price  = base * (1 + alert_pct / 100)   # 反弹目标（卖出/止盈参考）
+        pullback_target_price = base * (1 - alert_pct / 100)   # 回落目标（买入/加仓参考）
+
+        # 距离现价的百分比（正=还要涨多少，负=已经超过目标）
+        dist_to_rebound_pct  = (rebound_target_price  - curr) / curr * 100 if curr > 0 else 0
+        dist_to_pullback_pct = (pullback_target_price - curr) / curr * 100 if curr > 0 else 0
+
+        dist_to_rebound_yuan  = rebound_target_price  - curr
+        dist_to_pullback_yuan = pullback_target_price - curr
+
+        # ─────────────── 界面展示 ───────────────
+        with st.container(border=True):
+            cols = st.columns([1.8, 1.4, 1.8, 1.8, 0.9])
+
+            # 股票 + 基准
+            cols[0].markdown(f"**{stock}**  \n基准 {base:.3f}")
             
-            st.info(f"💡 {sel_stock} 当前现价: **{curr_v:.3f}**")
-            
-            col1, col2 = st.columns(2)
-            u_base = col1.number_input("我的成本/基准价", value=curr_v, format="%.3f", help="你的买入成本或当前的参考基准")
-            u_target = col2.number_input("我的目标买入/卖出价", value=curr_v * 1.05, format="%.3f", help="你想在哪一个价格执行交易")
-            
-            if st.button("🚀 加入目标追踪"):
-                c.execute("INSERT OR REPLACE INTO price_targets (code, base_price, buy_target) VALUES (?, ?, ?)",
-                          (sel_stock, u_base, u_target))
-                conn.commit()
-                st.success(f"已开始追踪 {sel_stock} 的目标价")
-                st.rerun()
+            # 当前价
+            cols[1].metric("现价", f"{curr:.3f}")
 
-    # 3. 监控显示逻辑
-    targets_df = pd.read_sql("SELECT * FROM price_targets", conn)
-    current_prices = {r[0]: r[1] for r in c.execute("SELECT code, current_price FROM prices").fetchall()}
+            # 回落目标（买入方向）
+            pullback_color = "inverse" if curr <= pullback_target_price else "normal"
+            cols[2].metric(
+                "回落买入价",
+                f"{pullback_target_price:.3f}",
+                delta=f"{dist_to_pullback_yuan:+.3f}  ({dist_to_pullback_pct:+.1f}%)",
+                delta_color=pullback_color
+            )
 
-    if not targets_df.empty:
-        # 使用你喜欢的 HTML 表格风格
-        html_rows = ""
-        for _, row in targets_df.iterrows():
-            stock = row['code']
-            base = row['base_price'] or 0.0
-            target = row['buy_target'] or 0.0
-            curr = current_prices.get(stock, 0.0)
-            
-            if curr > 0 and target > 0:
-                # 逻辑核心：计算现价距离目标的幅度
-                # 公式：(目标价 - 现价) / 现价
-                dist_to_target = (target - curr) / curr * 100
-                
-                # 盈亏计算：(现价 - 成本价) / 成本价
-                profit_ratio = (curr - base) / base * 100 if base > 0 else 0
-                
-                color_profit = "profit-red" if profit_ratio >= 0 else "loss-green"
-                # 距离目标价的提示：如果是正数，说明还要涨这么多才到；负数说明还要跌这么多
-                target_direction = "需涨" if dist_to_target > 0 else "需跌"
-                
-                html_rows += f"""
-                <tr>
-                    <td><b>{stock}</b></td>
-                    <td>{base:.3f}</td>
-                    <td class="{color_profit}">{profit_ratio:+.2f}%</td>
-                    <td style="color:#1E88E5;">{target:.3f}</td>
-                    <td style="font-weight:bold;">{target_direction} {abs(dist_to_target):.2f}%</td>
-                </tr>
-                """
+            # 反弹目标（卖出方向）
+            rebound_color = "inverse" if curr >= rebound_target_price else "normal"
+            cols[3].metric(
+                "反弹卖出价",
+                f"{rebound_target_price:.3f}",
+                delta=f"{dist_to_rebound_yuan:+.3f}  ({dist_to_rebound_pct:+.1f}%)",
+                delta_color=rebound_color
+            )
 
-        st.markdown(f"""
-            <table class="custom-table">
-                <thead>
-                    <tr>
-                        <th>股票</th>
-                        <th>成本价</th>
-                        <th>当前盈亏</th>
-                        <th>目标价</th>
-                        <th>距离目标</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {html_rows}
-                </tbody>
-            </table>
-        """, unsafe_allow_html=True)
-
-        # 4. 删除管理
-        with st.expander("🗑️ 移除追踪"):
-            to_del = st.multiselect("选择要删除的股票", targets_df['code'].tolist())
-            if st.button("确认移除"):
-                for s in to_del:
-                    c.execute("DELETE FROM price_targets WHERE code=?", (s,))
+            # 删除按钮
+            if cols[4].button("🗑️", key=f"del_{stock}", help="移除此监控"):
+                c.execute("DELETE FROM price_targets WHERE code=?", (stock,))
                 conn.commit()
                 st.rerun()
-    else:
-        st.info("尚未设定任何目标价格。")
 
+    st.caption("· 回落买入价：价格跌到该点位可考虑买入/加仓")
+    st.caption("· 反弹卖出价：价格涨到该点位可考虑卖出/止盈")
+    st.caption("· 红色 delta 表示「已经达到或超过」目标")
+
+else:
+    st.info("暂无监控项目，请在上方添加新基准价格")
 
 
 
@@ -811,6 +785,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
