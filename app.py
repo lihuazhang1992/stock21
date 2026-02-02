@@ -447,97 +447,93 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-# --- 价格目标管理 ---
 elif choice == "🎯 价格目标管理":
-    # 1) 读取数据
-    try:
-        targets_raw = c.execute("SELECT code, buy_base, sell_base FROM price_targets").fetchall()
-    except sqlite3.OperationalError:
-        targets_raw = c.execute("SELECT code, base_price, 0.0 FROM price_targets").fetchall()
-    targets_dict = {r[0]: {"buy": r[1] or 0.0, "sell": r[2] or 0.0} for r in targets_raw}
-
-    def ensure_columns():
-        for col in ["buy_base", "sell_base"]:
-            try:
-                c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} REAL DEFAULT 0.0")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-        thread = threading.Thread(target=sync_db_to_github, daemon=True)
-        thread.start()
-
-    current_prices = {row[0]: row[1] or 0.0
-                      for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
-    all_stocks = get_dynamic_stock_list()
-
-    # ---- 2. 顶部一行：标题 + 新增按钮 ----
-    c1, c2 = st.columns([4, 1])
-    c1.markdown("## 🎯 价格目标管理")
-    c2.markdown("<br>", unsafe_allow_html=True)
-    with c2.expander("➕ 新增", expanded=False):
-        selected_stock = st.selectbox("股票", [""] + all_stocks, key="target_stock_select")
+    st.header("🎯 动态追踪目标管理")
+    
+    # --- A. 新增/编辑监控配置 ---
+    with st.expander("➕ 设置监控基准 (突破后追踪)", expanded=False):
+        all_stocks = get_dynamic_stock_list()
+        selected_stock = st.selectbox("选择股票", [""] + all_stocks)
+        
         if selected_stock:
-            curr = current_prices.get(selected_stock, 0.0)
-            st.caption(f"现价 **{curr:.3f}**" if curr > 0 else "暂无现价")
-            exist = targets_dict.get(selected_stock, {"buy": 0.0, "sell": 0.0})
-            buy_val = float(exist["buy"]) if exist["buy"] else 0.0
-            sell_val = float(exist["sell"]) if exist["sell"] else 0.0
-            buy_base = st.number_input("买入基准", value=buy_val, step=0.001, format="%.3f")
-            sell_base = st.number_input("卖出基准", value=sell_val, step=0.001, format="%.3f")
-            if st.button("保存", type="primary"):
-                ensure_columns()
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            curr = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}.get(selected_stock, 0.0)
+            st.write(f"当前现价: `{curr:.3f}`")
+            
+            col1, col2, col3 = st.columns(3)
+            mode = col1.selectbox("监控方向", ["向上突破", "向下跌破"])
+            base_p = col2.number_input("基准价格", step=0.001, format="%.3f")
+            trace_p = col3.number_input("跟踪回撤/反弹 (%)", value=2.0, step=0.1)
+            
+            if st.button("启动监控"):
                 c.execute("""
-                    INSERT OR REPLACE INTO price_targets
-                    (code, buy_base, sell_base, last_updated)
-                    VALUES (?,?,?,?)
-                """, (selected_stock, buy_base, sell_base, now_str))
+                    INSERT OR REPLACE INTO price_targets (code, buy_target, sell_target, base_price, last_updated, is_triggered, peak_price)
+                    VALUES (?, ?, ?, ?, ?, 0, 0)
+                """, (selected_stock, trace_p, 0, base_p, datetime.now().strftime("%H:%M"),))
                 conn.commit()
-                thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                thread.start()
-                st.success("已保存")
+                st.success(f"{selected_stock} 监控已就绪")
+                st.rerun()
 
-    # ---- 3. 栅格卡片（一排两张，紧凑） ----
-    st.subheader("当前监控")
+    # --- B. 监控看板 ---
+    targets = pd.read_sql("SELECT * FROM price_targets", conn)
+    current_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
 
-    rows = []
-    for stock in all_stocks:
+    for _, row in targets.iterrows():
+        stock = row['code']
         curr = current_prices.get(stock, 0.0)
-        if curr <= 0:
-            continue
-        t = targets_dict.get(stock, {"buy": 0.0, "sell": 0.0})
-        buy_base = t["buy"]
-        sell_base = t["sell"]
-        if buy_base > 0:
-            buy_pct = abs((buy_base - curr) / buy_base * 100)
-            rows.append([stock, "买入", buy_base, curr, buy_pct])
-        if sell_base > 0:
-            sell_pct = abs((curr - sell_base) / sell_base * 100)
-            rows.append([stock, "卖出", sell_base, curr, sell_pct])
+        base = row['base_price']
+        trace = row['buy_target'] # 借用字段存百分比
+        peak = row['peak_price']
+        triggered = row['is_triggered']
+        
+        # 容器外观样式
+        with st.container():
+            c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 1])
+            
+            # 状态判断：是否触发突破
+            if not triggered:
+                # 逻辑：现价超过基准（向上）或低于基准（向下）
+                is_break = (curr >= base) # 简化逻辑，实际可细分
+                status_tile = "⚪ 等待突破"
+                color = "grey"
+                if is_break:
+                    c.execute("UPDATE price_targets SET is_triggered=1, peak_price=? WHERE code=?", (curr, stock))
+                    conn.commit()
+                    st.rerun()
+            else:
+                status_tile = "🔥 追踪中"
+                color = "red"
 
-    if rows:
-        rows.sort(key=lambda x: x[4])  # 按距离升序
-        cols = st.columns(2)           # 一排两张卡片
-        for idx, r in enumerate(rows):
-            stock, direction, base, curr, pct = r
-            color = "#4CAF50" if direction == "买入" else "#F44336"
-            with cols[idx % 2]:
-                st.markdown(f"""
-                <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
-                            padding:8px 10px;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08);">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="font-size:1.05em;font-weight:600;">{stock}</span>
-                        <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
-                    </div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">基准 {base:.3f}　现价 {curr:.3f}</div>
-                    <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
-                        还差 {pct:.2f}%
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("暂无基准价记录")
+            c1.markdown(f"### {stock}")
+            c1.caption(f"基准: {base:.3f} | 追踪: {trace}%")
 
+            if triggered:
+                # 动态更新峰值的输入框
+                new_peak = c2.number_input(f"修改峰值 ({stock})", value=float(peak), step=0.001, format="%.3f", key=f"peak_{stock}")
+                if new_peak != peak:
+                    c.execute("UPDATE price_targets SET peak_price=? WHERE code=?", (new_peak, stock))
+                    conn.commit()
+                    st.rerun()
+                
+                # 计算偏离度
+                diff_pct = abs((curr - new_peak) / new_peak * 100)
+                progress = min(diff_pct / trace, 1.0)
+                
+                c3.write(f"**当前峰值: {new_peak:.3f}**")
+                c3.write(f"偏离: `{diff_pct:.2f}%` / 阈值: `{trace}%`")
+                c3.progress(progress)
+                
+                if diff_pct >= trace:
+                    c4.warning("⚠️ 达到目标!")
+                    if st.button("完成/重置", key=f"reset_{stock}"):
+                        c.execute("DELETE FROM price_targets WHERE code=?", (stock,))
+                        conn.commit()
+                        st.rerun()
+            else:
+                c2.metric("当前现价", curr)
+                dist = abs(curr - base) / base * 100
+                c3.write(f"距离基准还有: `{dist:.2f}%`")
+            
+            st.divider()
 
 
 
@@ -810,6 +806,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
