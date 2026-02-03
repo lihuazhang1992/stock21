@@ -146,7 +146,26 @@ try:
     c.execute("ALTER TABLE trades ADD COLUMN note TEXT")
 except sqlite3.OperationalError:
     pass
+
+# === 新增：为价格目标管理添加新字段（买入/卖出体系独立） ===
+new_columns = [
+    ("buy_high_point", "REAL DEFAULT 0.0"),
+    ("buy_drop_pct", "REAL DEFAULT 0.0"),
+    ("buy_status", "TEXT DEFAULT '未突破'"),
+    ("buy_extreme_low", "REAL DEFAULT 0.0"),
+    ("sell_low_point", "REAL DEFAULT 0.0"),
+    ("sell_rise_pct", "REAL DEFAULT 0.0"),
+    ("sell_status", "TEXT DEFAULT '未突破'"),
+    ("sell_extreme_high", "REAL DEFAULT 0.0")
+]
+for col_name, col_def in new_columns:
+    try:
+        c.execute(f"ALTER TABLE price_targets ADD COLUMN {col_name} {col_def}")
+    except sqlite3.OperationalError:
+        pass
 conn.commit()
+# ==================================================================
+
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
 
@@ -166,6 +185,17 @@ st.markdown("""
     .custom-table tbody tr:nth-of-type(even) { background-color: #f8f8f8; }
     .profit-red { color: #d32f2f; font-weight: bold; }
     .loss-green { color: #388e3c; font-weight: bold; }
+    /* 价格目标管理专用样式 */
+    .target-card { background: #fff; border-radius: 6px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 4px solid #ccc; }
+    .card-buy { border-left-color: #d32f2f; } /* 红色买入 */
+    .card-sell { border-left-color: #388e3c; } /* 绿色卖出 */
+    .target-title { font-weight: bold; font-size: 1.1em; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .target-row { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.95em; }
+    .target-label { color: #666; }
+    .target-value { font-weight: 600; }
+    .tag-trend { padding: 2px 6px; border-radius: 4px; font-size: 0.8em; color: white; }
+    .bg-rebound { background-color: #FF9800; } /* 反弹中 - 橙色 */
+    .bg-callback { background-color: #2196F3; } /* 回调中 - 蓝色 */
     </style>
 """, unsafe_allow_html=True)
 
@@ -447,141 +477,261 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
+# --- 价格目标管理 (完全重构) ---
 elif choice == "🎯 价格目标管理":
-    st.header("🎯 价格目标管理（独立买入/卖出体系）")
+    st.header("🎯 价格目标管理")
+    
+    # 格式化辅助函数
+    def fmt_num(num):
+        if pd.isna(num) or num is None or num == 0:
+            return "0"
+        return f"{num:.3f}".rstrip('0').rstrip('.')
+    
+    def fmt_pct(num):
+        if pd.isna(num) or num is None:
+            return "-"
+        return f"{num:.2f}%"
 
+    # 获取所有股票和现价
     all_stocks = get_dynamic_stock_list()
     prices_map = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
-
-    # ── A. 配置与标记区 ────────────────────────────────────────────────
-    st.subheader("配置与突破标记")
-    col_buy, col_sell = st.columns(2)
-
-    with col_buy:
-        st.markdown("#### 买入体系（前期高点下跌 → 反弹买入）")
-        buy_stock = st.selectbox("股票（买入体系）", [""] + all_stocks, key="buy_stock_sel", index=0)
+    
+    # --- 1. 手动配置区 ---
+    st.subheader("⚙️ 策略配置")
+    selected_stock = st.selectbox("选择股票进行配置", [""] + all_stocks, index=None)
+    
+    if selected_stock:
+        # 获取当前配置
+        target_data = c.execute("""
+            SELECT buy_high_point, buy_drop_pct, buy_status, buy_extreme_low,
+                   sell_low_point, sell_rise_pct, sell_status, sell_extreme_high
+            FROM price_targets WHERE code = ?
+        """, (selected_stock,)).fetchone()
         
-        if buy_stock:
-            current_price = prices_map.get(buy_stock, 0.0)
-            st.caption(f"当前市场价：**{current_price:.3f}**" if current_price > 0 else "暂无现价")
+        # 默认值处理
+        defaults = {
+            "b_high": 0.0, "b_drop": 0.0, "b_stat": "未突破", "b_low": 0.0,
+            "s_low": 0.0, "s_rise": 0.0, "s_stat": "未突破", "s_high": 0.0
+        }
+        if target_data:
+            defaults = {
+                "b_high": target_data[0] or 0.0, "b_drop": target_data[1] or 0.0, 
+                "b_stat": target_data[2] or "未突破", "b_low": target_data[3] or 0.0,
+                "s_low": target_data[4] or 0.0, "s_rise": target_data[5] or 0.0, 
+                "s_stat": target_data[6] or "未突破", "s_high": target_data[7] or 0.0
+            }
 
-            # 读取已有配置（若无则为空）
-            buy_row = c.execute("""
-                SELECT reference_price, percent, is_breached, extreme_price 
-                FROM price_targets 
-                WHERE stock_code=? AND target_type='buy'
-            """, (buy_stock,)).fetchone()
-
-            ref_high   = buy_row[0] if buy_row else 0.0
-            pct_down   = buy_row[1] if buy_row else 10.0
-            breached   = bool(buy_row[2]) if buy_row else False
-            ext_low    = buy_row[3] if buy_row and buy_row[3] is not None else None
-
-            ref_high_new = st.number_input("前期高点价位", value=ref_high, step=0.001, format="%.3f", key=f"bh_{buy_stock}")
-            pct_down_new = st.number_input("下跌幅度 (%)",  value=pct_down, min_value=0.0, step=0.1, key=f"pd_{buy_stock}")
-            breached_new = st.selectbox("基准价突破状态", ["未突破", "已突破"], index=1 if breached else 0, key=f"br_{buy_stock}")
-
-            if st.button("保存买入体系配置", type="primary", key=f"save_buy_{buy_stock}"):
-                benchmark = ref_high_new * (1 - pct_down_new / 100) if ref_high_new > 0 else 0.0
-                breach_int = 1 if breached_new == "已突破" else 0
-                breach_dt  = datetime.now().strftime("%Y-%m-%d") if breach_int and not breached else (buy_row[3] if buy_row else None)
-
-                # 如果刚标记为已突破，但原来不是，则尝试初始化极值
-                if breach_int and (not breached):
-                    ext_low = current_price   # 初次可尝试用当前价作为起点（也可留空让用户后续手动维护）
-                    ext_date = datetime.now().strftime("%Y-%m-%d")
+        with st.form("target_config_form", clear_on_submit=False):
+            # 左右分栏
+            col_buy, col_sell = st.columns(2)
+            
+            # ===== 买入体系配置 =====
+            with col_buy:
+                st.markdown("#### 📉 买入价体系 (前期高点下跌)")
+                b_high = st.number_input("前期高价位", value=defaults["b_high"], step=0.001, format="%.3f", key="cfg_b_high")
+                b_drop = st.number_input("下跌幅度 (%)", value=defaults["b_drop"], step=0.1, key="cfg_b_drop")
+                b_stat = st.selectbox("突破状态", ["未突破", "已突破"], index=0 if defaults["b_stat"] == "未突破" else 1, key="cfg_b_stat")
+                st.caption("趋势类型: 反弹中 (自动)")
+                
+                # 仅在已突破时显示极值配置
+                if b_stat == "已突破":
+                    b_low = st.number_input("突破后最低价 (修正)", value=defaults["b_low"], step=0.001, format="%.3f", key="cfg_b_low")
+                    st.caption("💡 如出新低，请手动更新此值")
                 else:
-                    ext_low = ext_low
-                    ext_date = buy_row[4] if buy_row else None
+                    b_low = 0.0
 
+            # ===== 卖出体系配置 =====
+            with col_sell:
+                st.markdown("#### 📈 卖出价体系 (前期低点上涨)")
+                s_low = st.number_input("前期低点位", value=defaults["s_low"], step=0.001, format="%.3f", key="cfg_s_low")
+                s_rise = st.number_input("上涨幅度 (%)", value=defaults["s_rise"], step=0.1, key="cfg_s_rise")
+                s_stat = st.selectbox("突破状态", ["未突破", "已突破"], index=0 if defaults["s_stat"] == "未突破" else 1, key="cfg_s_stat")
+                st.caption("趋势类型: 回调中 (自动)")
+
+                # 仅在已突破时显示极值配置
+                if s_stat == "已突破":
+                    s_high = st.number_input("突破后最高价 (修正)", value=defaults["s_high"], step=0.001, format="%.3f", key="cfg_s_high")
+                    st.caption("💡 如出新高，请手动更新此值")
+                else:
+                    s_high = 0.0
+
+            # 保存按钮逻辑
+            submitted = st.form_submit_button("💾 保存配置并刷新计算")
+            if submitted:
+                # 处理极值初始化逻辑：如果状态变为已突破，且极值为空/0，尝试填入当前价
+                current_p = prices_map.get(selected_stock, 0.0)
+                
+                # 买入体系初始化
+                if b_stat == "已突破" and defaults["b_stat"] == "未突破" and b_low == 0.0:
+                    if current_p > 0: b_low = current_p
+                if b_stat == "未突破": b_low = 0.0 # 重置
+
+                # 卖出体系初始化
+                if s_stat == "已突破" and defaults["s_stat"] == "未突破" and s_high == 0.0:
+                    if current_p > 0: s_high = current_p
+                if s_stat == "未突破": s_high = 0.0 # 重置
+
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 c.execute("""
                     INSERT OR REPLACE INTO price_targets 
-                    (stock_code, target_type, reference_price, percent, benchmark_price, 
-                     is_breached, breach_date, extreme_price, extreme_date, last_updated)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                """, (buy_stock, 'buy', ref_high_new, pct_down_new, benchmark,
-                      breach_int, breach_dt, ext_low, ext_date, datetime.now().strftime("%Y-%m-%d %H:%M")))
+                    (code, buy_high_point, buy_drop_pct, buy_status, buy_extreme_low,
+                     sell_low_point, sell_rise_pct, sell_status, sell_extreme_high, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (selected_stock, b_high, b_drop, b_stat, b_low, s_low, s_rise, s_stat, s_high, now_str))
                 conn.commit()
                 thread = threading.Thread(target=sync_db_to_github, daemon=True)
                 thread.start()
-                st.success("买入体系已更新")
+                st.success("配置已保存！监控页面已刷新。")
                 st.rerun()
 
-    with col_sell:
-        # 卖出体系配置（逻辑对称，略写）
-        # ... 同上，字段改为 reference_low, pct_up, extreme_high 等 ...
-
-    # ── B. 监控展示区 ──────────────────────────────────────────────────
-    st.subheader("实时监控")
-
-    buy_configs = pd.read_sql("""
-        SELECT * FROM price_targets 
-        WHERE target_type='buy' AND reference_price > 0
-    """, conn)
-
-    for _, cfg in buy_configs.iterrows():
-        code = cfg['stock_code']
-        curr = prices_map.get(code, 0.0)
-        if curr <= 0: continue
-
-        bm_price = cfg['benchmark_price']
-        breached = bool(cfg['is_breached'])
-        ref      = cfg['reference_price']
-        pct      = cfg['percent']
-        ext_low  = cfg['extreme_price']
-
-        # 计算目标买入价（38.2%）
-        if breached and ext_low is not None and ext_low > 0:
-            fall_abs = ref - ext_low
-            buy_target = ext_low + fall_abs * 0.382
-            rebound_pct = (buy_target - ext_low) / ext_low * 100 if ext_low > 0 else 0
-            dist_to_buy = (buy_target - curr) / curr * 100 if curr > 0 else None
-        else:
-            buy_target = None
-            rebound_pct = None
-            dist_to_buy = None
-
-        # 未突破时的距离
-        if not breached:
-            dist_to_bm = (bm_price - curr) / curr * 100 if curr > 0 and bm_price > 0 else None
-
-        # 渲染卡片（可封装成函数）
-        color = "#4CAF50"
-        title = f"{code} — 买入目标（反弹中）" if breached else f"{code} — 等待突破基准价"
-        with st.container():
-            st.markdown(f"""
-            <div style="border-left:4px solid {color}; padding:12px; background:#f8fff8; border-radius:6px; margin:8px 0;">
-                <strong>{title}</strong><br>
-                前期高点 {ref:.3f}　下跌 {pct:.1f}%　→　基准价 <strong>{bm_price:.3f}</strong>
-            """, unsafe_allow_html=True)
-
-            if breached:
-                st.write(f"突破后最低价：**{ext_low:.3f}**")
-                if buy_target:
-                    st.write(f"**目标买入价：{buy_target:.3f}**　（从低点反弹 {rebound_pct:.2f}%）")
-                    if dist_to_buy is not None:
-                        st.write(f"当前价距离买入价还差 **{dist_to_buy:+.2f}%**")
+    # --- 2. 监控页显示区 ---
+    st.write("---")
+    st.subheader("📡 策略监控 (实时)")
+    
+    # 获取所有已配置的数据
+    # 筛选条件：只要配置了前期点位 或 下跌/上涨幅度 > 0，就认为激活
+    df_targets = pd.read_sql("SELECT * FROM price_targets", conn)
+    
+    display_container = st.container()
+    
+    if not df_targets.empty:
+        for _, row in df_targets.iterrows():
+            code = row['code']
+            now_p = prices_map.get(code, 0.0)
+            
+            # ===== 买入体系显示逻辑 =====
+            b_active = (row['buy_high_point'] > 0 or row['buy_drop_pct'] > 0)
+            if b_active:
+                # 计算核心值
+                base_price = row['buy_high_point'] * (1 - row['buy_drop_pct']/100)
+                
+                # 构建 HTML
+                html_buy = f"""
+                <div class="target-card card-buy">
+                    <div class="target-title">
+                        <span>{code} 【买入体系】</span>
+                        <span class="tag-trend bg-rebound">反弹中</span>
+                    </div>
+                """
+                
+                if row['buy_status'] == '未突破':
+                    # 计算距离突破还差
+                    if now_p > 0:
+                        dist_pct = (base_price - now_p) / now_p * 100
+                        dist_str = f"距离基准价还差 <span class='profit-red'>{fmt_pct(abs(dist_pct))}</span> 突破"
+                    else:
+                        dist_str = "当前价无效"
+                        
+                    html_buy += f"""
+                    <div class="target-row"><span class="target-label">前期高点:</span> <span class="target-value">{fmt_num(row['buy_high_point'])}</span></div>
+                    <div class="target-row"><span class="target-label">下跌幅度:</span> <span class="target-value">{row['buy_drop_pct']:.2f}%</span></div>
+                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                    <div class="target-row" style="margin-top:8px; border-top:1px dashed #eee; padding-top:4px;">{dist_str}</div>
+                    """
                 else:
-                    st.write("→ 暂无突破后最低价，请维护极值")
-            else:
-                if dist_to_bm is not None:
-                    st.write(f"距离基准价还差 **{dist_to_bm:.2f}%** 突破")
+                    # 已突破
+                    extreme_low = row['buy_extreme_low']
+                    # 买入价 = 最低价 + (前期高点 - 最低价) * 0.382
+                    if extreme_low > 0:
+                        buy_price = extreme_low + (row['buy_high_point'] - extreme_low) * 0.382
+                        rebound_pct = (buy_price - extreme_low) / extreme_low * 100 if extreme_low > 0 else 0
+                        
+                        # 距买入价还差
+                        if now_p > 0:
+                            dist_target_pct = (buy_price - now_p) / now_p * 100
+                            dist_target_str = f"距买入价还差 {fmt_pct(abs(dist_target_pct))}"
+                        else:
+                            dist_target_str = "-"
+                            
+                        html_buy += f"""
+                        <div class="target-row"><span class="target-label">前期高点:</span> <span class="target-value">{fmt_num(row['buy_high_point'])}</span></div>
+                        <div class="target-row"><span class="target-label">下跌幅度:</span> <span class="target-value">{row['buy_drop_pct']:.2f}%</span></div>
+                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
+                        <div class="target-row"><span class="target-label">突破后最低价:</span> <span class="target-value">{fmt_num(extreme_low)}</span></div>
+                        <div class="target-row"><span class="target-label">目标买入价:</span> <span class="target-value" style="color:#d32f2f">{fmt_num(buy_price)}</span></div>
+                        <div class="target-row"><span class="target-label">低价→买入反弹:</span> <span class="target-value">{fmt_pct(rebound_pct)}</span></div>
+                        <div class="target-row">{dist_target_str}</div>
+                        """
+                    else:
+                        html_buy += f"""
+                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div class="target-row" style="color:#888;">⚠️ 请配置突破后最低价以计算目标价</div>
+                        """
+                
+                html_buy += "</div>"
+                display_container.markdown(html_buy, unsafe_allow_html=True)
+
+            # ===== 卖出体系显示逻辑 =====
+            s_active = (row['sell_low_point'] > 0 or row['sell_rise_pct'] > 0)
+            if s_active:
+                # 计算核心值
+                base_price = row['sell_low_point'] * (1 + row['sell_rise_pct']/100)
+                
+                html_sell = f"""
+                <div class="target-card card-sell">
+                    <div class="target-title">
+                        <span>{code} 【卖出体系】</span>
+                        <span class="tag-trend bg-callback">回调中</span>
+                    </div>
+                """
+                
+                if row['sell_status'] == '未突破':
+                    if now_p > 0:
+                        dist_pct = (base_price - now_p) / now_p * 100
+                        dist_str = f"距离基准价还差 <span class='loss-green'>{fmt_pct(abs(dist_pct))}</span> 突破"
+                    else:
+                        dist_str = "当前价无效"
+                        
+                    html_sell += f"""
+                    <div class="target-row"><span class="target-label">前期低点:</span> <span class="target-value">{fmt_num(row['sell_low_point'])}</span></div>
+                    <div class="target-row"><span class="target-label">上涨幅度:</span> <span class="target-value">{row['sell_rise_pct']:.2f}%</span></div>
+                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                    <div class="target-row" style="margin-top:8px; border-top:1px dashed #eee; padding-top:4px;">{dist_str}</div>
+                    """
                 else:
-                    st.write("当前价数据不足，无法计算距离")
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    # 卖出体系展示（对称逻辑，略）
-
-    # 可选：极值手动维护区（突破后允许用户更新 extreme_price）
-    # ...
-
-
-
-
-
-
-
+                    # 已突破
+                    extreme_high = row['sell_extreme_high']
+                    # 卖出价 = 最高价 - (最高价 - 前期低点) * 0.618
+                    if extreme_high > 0:
+                        sell_price = extreme_high - (extreme_high - row['sell_low_point']) * 0.618
+                        callback_pct = (extreme_high - sell_price) / extreme_high * 100 if extreme_high > 0 else 0
+                        
+                        # 距卖出价还差
+                        if now_p > 0:
+                            dist_target_pct = (now_p - sell_price) / sell_price * 100
+                            dist_target_str = f"距卖出价还差 {fmt_pct(abs(dist_target_pct))}"
+                        else:
+                            dist_target_str = "-"
+                            
+                        html_sell += f"""
+                        <div class="target-row"><span class="target-label">前期低点:</span> <span class="target-value">{fmt_num(row['sell_low_point'])}</span></div>
+                        <div class="target-row"><span class="target-label">上涨幅度:</span> <span class="target-value">{row['sell_rise_pct']:.2f}%</span></div>
+                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
+                        <div class="target-row"><span class="target-label">突破后最高价:</span> <span class="target-value">{fmt_num(extreme_high)}</span></div>
+                        <div class="target-row"><span class="target-label">目标卖出价:</span> <span class="target-value" style="color:#388e3c">{fmt_num(sell_price)}</span></div>
+                        <div class="target-row"><span class="target-label">高价→卖出回落:</span> <span class="target-value">{fmt_pct(callback_pct)}</span></div>
+                        <div class="target-row">{dist_target_str}</div>
+                        """
+                    else:
+                        html_sell += f"""
+                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div class="target-row" style="color:#888;">⚠️ 请配置突破后最高价以计算目标价</div>
+                        """
+                
+                html_sell += "</div>"
+                display_container.markdown(html_sell, unsafe_allow_html=True)
+                
+        # 如果所有股票都没有激活配置
+        if df_targets.empty or all([
+            not (r['buy_high_point'] > 0 or r['buy_drop_pct'] > 0) and 
+            not (r['sell_low_point'] > 0 or r['sell_rise_pct'] > 0) 
+            for _, r in df_targets.iterrows()
+        ]):
+            st.info("暂无激活的策略配置，请在上方选择股票并设置参数。")
+    else:
+        st.info("暂无价格目标数据，请先添加配置。")
 
 # --- 交易录入 ---
 elif choice == "📝 交易录入":
@@ -832,8 +982,6 @@ elif choice == "📓 复盘日记":
 
             st.caption(f"共 {len(journal_df)} 条记录，当前显示 {len(display_df)} 条")
 
-
-
 # --- 下载数据库按钮 ---
 col1, col2, col3 = st.columns([5, 1, 1])
 with col3:
@@ -846,15 +994,3 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-
-
-
-
-
-
-
-
-
-
-
-
