@@ -625,7 +625,7 @@ elif choice == "🎯 价格目标管理":
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
                             <span style="color: #94a3b8; font-size: 0.9em;">当前价:</span>
-                            <span style="color: #cbd5e1; font-size: 1.1em;">{item['current_price']:.3f}" if item['current_price'] > 0 else "未设置" + "</span>
+                            <span style="color: #cbd5e1; font-size: 1.1em;">{f"{item['current_price']:.3f}" if item['current_price'] > 0 else "未设置"}</span>
                         </div>
                         <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px; text-align: center;">
                             <span style="color: #fbbf24; font-size: 1.1em; font-weight: bold;">📊 {pct_text}</span>
