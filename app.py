@@ -577,7 +577,7 @@ elif choice == "🎯 价格目标管理":
                 st.success(f"{selected_stock} - {target_type}目标配置已保存！")
                 st.rerun()
 
-    # 4) 计算目标价 + 展示监控卡片
+        # 4) 计算目标价 + 展示监控卡片
     st.subheader("📊 实时监控（目标价计算）")
     if not targets_dict:
         st.info("暂无配置，请先添加目标监控")
@@ -616,40 +616,50 @@ elif choice == "🎯 价格目标管理":
                 "反弹中": "🟢 反弹中（已计算目标价）"
             }[trend_phase]
 
-            # 渲染卡片
-            with cols[idx % 2]:
-                st.markdown(f"""
-                <div style="background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;
-                            box-shadow:0 2px 4px rgba(0,0,0,.1);border-left:4px solid {color};">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:1.1em;font-weight:600;">{stock}</span>
-                        <span style="background:{color};color:#fff;border-radius:4px;padding:2px 8px;font-size:0.8em;">
-                            {target_type}目标
-                        </span>
-                    </div>
-                    <div style="font-size:0.9em;color:#666;margin-bottom:4px;">
-                        基准价：{breakdown_base:.3f} | 反弹比例：{rebound_pct:.1f}%
-                    </div>
-                    <div style="font-size:0.9em;color:#666;margin-bottom:4px;">
-                        跌破后最低价：{lowest_price:.3f} | 阶段：{phase_text}
-                    </div>
-                    {f"""
-                    <div style="margin-top:8px;">
-                        <div style="font-size:0.9em;color:#333;">{target_type}目标价：<strong>{target_price:.3f}</strong></div>
-                        <div style="font-size:0.9em;color:{color};">
-                            现价{current_p:.3f} | 距目标价：{diff_pct:.2f}%
-                        </div>
-                    </div>
-                    """ if target_price > 0 else f"""
-                    <div style="margin-top:8px;font-size:0.9em;color:#999;">
-                        ⚠️ 暂未计算目标价（{phase_text}）
-                    </div>
-                    """}
-                    <div style="font-size:0.7em;color:#aaa;margin-top:6px;">
-                        最后更新：{config['last_updated'] or '未更新'}
+            # 修复：重构HTML字符串，避免多行f-string语法错误
+            # 步骤1：构建目标价展示的HTML片段
+            if target_price > 0:
+                target_html = f"""
+                <div style="margin-top:8px;">
+                    <div style="font-size:0.9em;color:#333;">{target_type}目标价：<strong>{target_price:.3f}</strong></div>
+                    <div style="font-size:0.9em;color:{color};">
+                        现价{current_p:.3f} | 距目标价：{diff_pct:.2f}%
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """
+            else:
+                target_html = f"""
+                <div style="margin-top:8px;font-size:0.9em;color:#999;">
+                    ⚠️ 暂未计算目标价（{phase_text}）
+                </div>
+                """
+            
+            # 步骤2：完整卡片HTML（使用单引号包裹style，避免与双引号冲突）
+            card_html = f'''
+            <div style='background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;
+                        box-shadow:0 2px 4px rgba(0,0,0,.1);border-left:4px solid {color};'>
+                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>
+                    <span style='font-size:1.1em;font-weight:600;'>{stock}</span>
+                    <span style='background:{color};color:#fff;border-radius:4px;padding:2px 8px;font-size:0.8em;'>
+                        {target_type}目标
+                    </span>
+                </div>
+                <div style='font-size:0.9em;color:#666;margin-bottom:4px;'>
+                    基准价：{breakdown_base:.3f} | 反弹比例：{rebound_pct:.1f}%
+                </div>
+                <div style='font-size:0.9em;color:#666;margin-bottom:4px;'>
+                    跌破后最低价：{lowest_price:.3f} | 阶段：{phase_text}
+                </div>
+                {target_html}
+                <div style='font-size:0.7em;color:#aaa;margin-top:6px;'>
+                    最后更新：{config['last_updated'] or '未更新'}
+                </div>
+            </div>
+            '''
+            
+            # 渲染卡片（确保unsafe_allow_html=True生效）
+            with cols[idx % 2]:
+                st.markdown(card_html, unsafe_allow_html=True)
 
     # 4) 批量更新最低价（快捷操作）
     with st.expander("⚡ 批量更新跌破后最低价", expanded=False):
@@ -952,6 +962,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
