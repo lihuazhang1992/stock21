@@ -605,13 +605,16 @@ elif choice == "🎯 价格目标管理":
                 # 计算核心值
                 base_price = row['buy_high_point'] * (1 - row['buy_drop_pct']/100)
                 
-                # 构建 HTML
+                # 构建 HTML（使用更简洁的结构，避免复杂嵌套）
                 html_buy = f"""
                 <div class="target-card card-buy">
                     <div class="target-title">
                         <span>{code} 【买入体系】</span>
                         <span class="tag-trend bg-rebound">反弹中</span>
                     </div>
+                    <div class="target-row"><span class="target-label">前期高点:</span> <span class="target-value">{fmt_num(row['buy_high_point'])}</span></div>
+                    <div class="target-row"><span class="target-label">下跌幅度:</span> <span class="target-value">{row['buy_drop_pct']:.2f}%</span></div>
+                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                 """
                 
                 if row['buy_status'] == '未突破':
@@ -621,11 +624,8 @@ elif choice == "🎯 价格目标管理":
                         dist_str = f"距离基准价还差 <span class='profit-red'>{fmt_pct(abs(dist_pct))}</span> 突破"
                     else:
                         dist_str = "当前价无效"
-                        
+                    
                     html_buy += f"""
-                    <div class="target-row"><span class="target-label">前期高点:</span> <span class="target-value">{fmt_num(row['buy_high_point'])}</span></div>
-                    <div class="target-row"><span class="target-label">下跌幅度:</span> <span class="target-value">{row['buy_drop_pct']:.2f}%</span></div>
-                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                     <div class="target-row" style="margin-top:8px; border-top:1px dashed #eee; padding-top:4px;">{dist_str}</div>
                     """
                 else:
@@ -642,11 +642,8 @@ elif choice == "🎯 价格目标管理":
                             dist_target_str = f"距买入价还差 {fmt_pct(abs(dist_target_pct))}"
                         else:
                             dist_target_str = "-"
-                            
+                        
                         html_buy += f"""
-                        <div class="target-row"><span class="target-label">前期高点:</span> <span class="target-value">{fmt_num(row['buy_high_point'])}</span></div>
-                        <div class="target-row"><span class="target-label">下跌幅度:</span> <span class="target-value">{row['buy_drop_pct']:.2f}%</span></div>
-                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                         <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
                         <div class="target-row"><span class="target-label">突破后最低价:</span> <span class="target-value">{fmt_num(extreme_low)}</span></div>
                         <div class="target-row"><span class="target-label">目标买入价:</span> <span class="target-value" style="color:#d32f2f">{fmt_num(buy_price)}</span></div>
@@ -655,7 +652,7 @@ elif choice == "🎯 价格目标管理":
                         """
                     else:
                         html_buy += f"""
-                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
                         <div class="target-row" style="color:#888;">⚠️ 请配置突破后最低价以计算目标价</div>
                         """
                 
@@ -674,6 +671,9 @@ elif choice == "🎯 价格目标管理":
                         <span>{code} 【卖出体系】</span>
                         <span class="tag-trend bg-callback">回调中</span>
                     </div>
+                    <div class="target-row"><span class="target-label">前期低点:</span> <span class="target-value">{fmt_num(row['sell_low_point'])}</span></div>
+                    <div class="target-row"><span class="target-label">上涨幅度:</span> <span class="target-value">{row['sell_rise_pct']:.2f}%</span></div>
+                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                 """
                 
                 if row['sell_status'] == '未突破':
@@ -682,11 +682,8 @@ elif choice == "🎯 价格目标管理":
                         dist_str = f"距离基准价还差 <span class='loss-green'>{fmt_pct(abs(dist_pct))}</span> 突破"
                     else:
                         dist_str = "当前价无效"
-                        
+                    
                     html_sell += f"""
-                    <div class="target-row"><span class="target-label">前期低点:</span> <span class="target-value">{fmt_num(row['sell_low_point'])}</span></div>
-                    <div class="target-row"><span class="target-label">上涨幅度:</span> <span class="target-value">{row['sell_rise_pct']:.2f}%</span></div>
-                    <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                     <div class="target-row" style="margin-top:8px; border-top:1px dashed #eee; padding-top:4px;">{dist_str}</div>
                     """
                 else:
@@ -703,11 +700,8 @@ elif choice == "🎯 价格目标管理":
                             dist_target_str = f"距卖出价还差 {fmt_pct(abs(dist_target_pct))}"
                         else:
                             dist_target_str = "-"
-                            
+                        
                         html_sell += f"""
-                        <div class="target-row"><span class="target-label">前期低点:</span> <span class="target-value">{fmt_num(row['sell_low_point'])}</span></div>
-                        <div class="target-row"><span class="target-label">上涨幅度:</span> <span class="target-value">{row['sell_rise_pct']:.2f}%</span></div>
-                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
                         <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
                         <div class="target-row"><span class="target-label">突破后最高价:</span> <span class="target-value">{fmt_num(extreme_high)}</span></div>
                         <div class="target-row"><span class="target-label">目标卖出价:</span> <span class="target-value" style="color:#388e3c">{fmt_num(sell_price)}</span></div>
@@ -716,7 +710,7 @@ elif choice == "🎯 价格目标管理":
                         """
                     else:
                         html_sell += f"""
-                        <div class="target-row"><span class="target-label">基准价:</span> <span class="target-value">{fmt_num(base_price)}</span></div>
+                        <div style="margin:5px 0; border-top:1px dashed #ddd;"></div>
                         <div class="target-row" style="color:#888;">⚠️ 请配置突破后最高价以计算目标价</div>
                         """
                 
@@ -732,6 +726,7 @@ elif choice == "🎯 价格目标管理":
             st.info("暂无激活的策略配置，请在上方选择股票并设置参数。")
     else:
         st.info("暂无价格目标数据，请先添加配置。")
+
 
 # --- 交易录入 ---
 elif choice == "📝 交易录入":
@@ -994,3 +989,4 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
