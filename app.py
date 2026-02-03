@@ -447,8 +447,31 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
+import sqlite3
+import datetime
+import threading
+import streamlit as st
+
+# 假设这些函数/变量在你的代码中已定义，这里补充必要的占位以保证代码完整性
+def get_dynamic_stock_list():
+    """获取股票列表（请根据你的实际逻辑修改）"""
+    # 这里是示例，你需要替换为真实的股票列表获取逻辑
+    c.execute("SELECT DISTINCT code FROM prices")
+    return [row[0] for row in c.fetchall()]
+
+def sync_db_to_github():
+    """同步数据库到GitHub（请根据你的实际逻辑修改）"""
+    # 这里是占位，替换为你的同步逻辑
+    pass
+
+# 初始化数据库连接（请确保你的conn/c变量已正确初始化）
+conn = sqlite3.connect('stock_data.db', check_same_thread=False)
+c = conn.cursor()
+
 # --- 价格目标管理 ---
-elif choice == "🎯 价格目标管理":
+choice = "🎯 价格目标管理"  # 仅用于测试，实际使用时请删除这行
+
+if choice == "🎯 价格目标管理":
     # 1) 初始化表结构（兼容新增字段）
     def init_targets_table():
         # 扩展表结构：新增跌破基准价、反弹比例、最低价、走势阶段字段
@@ -459,6 +482,19 @@ elif choice == "🎯 价格目标管理":
             ("trend_phase", "TEXT DEFAULT '未跌破'"),  # 走势阶段：未跌破/跌破中/反弹中
             ("target_type", "TEXT DEFAULT '买入'")     # 目标类型：买入/卖出（二选一）
         ]
+        # 先创建表（如果不存在）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS price_targets (
+                code TEXT PRIMARY KEY,
+                breakdown_base REAL DEFAULT 0.0,
+                rebound_pct REAL DEFAULT 0.0,
+                lowest_price REAL DEFAULT 0.0,
+                trend_phase TEXT DEFAULT '未跌破',
+                target_type TEXT DEFAULT '买入',
+                last_updated TEXT DEFAULT ''
+            )
+        """)
+        # 新增字段（如果不存在）
         for col, col_type in columns_to_add:
             try:
                 c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} {col_type}")
@@ -577,7 +613,7 @@ elif choice == "🎯 价格目标管理":
                 st.success(f"{selected_stock} - {target_type}目标配置已保存！")
                 st.rerun()
 
-        # 4) 计算目标价 + 展示监控卡片
+    # 4) 计算目标价 + 展示监控卡片
     st.subheader("📊 实时监控（目标价计算）")
     if not targets_dict:
         st.info("暂无配置，请先添加目标监控")
@@ -610,16 +646,16 @@ elif choice == "🎯 价格目标管理":
 
             # 卡片样式（区分买入/卖出）
             color = "#4CAF50" if target_type == "买入" else "#F44336"
-            phase_text = {
+            phase_text_map = {
                 "未跌破": "🟡 未跌破基准价",
                 "跌破中": "🔴 跌破中（待更新最低价）",
                 "反弹中": "🟢 反弹中（已计算目标价）"
-            }[trend_phase]
+            }
+            phase_text = phase_text_map.get(trend_phase, "🟡 未跌破基准价")
 
-            # 修复：重构HTML字符串，避免多行f-string语法错误
-            # 步骤1：构建目标价展示的HTML片段
+            # 构建卡片HTML内容（修复核心问题：正确拼接HTML，避免转义）
             if target_price > 0:
-                target_html = f"""
+                target_price_html = f"""
                 <div style="margin-top:8px;">
                     <div style="font-size:0.9em;color:#333;">{target_type}目标价：<strong>{target_price:.3f}</strong></div>
                     <div style="font-size:0.9em;color:{color};">
@@ -628,44 +664,46 @@ elif choice == "🎯 价格目标管理":
                 </div>
                 """
             else:
-                target_html = f"""
+                target_price_html = f"""
                 <div style="margin-top:8px;font-size:0.9em;color:#999;">
                     ⚠️ 暂未计算目标价（{phase_text}）
                 </div>
                 """
             
-            # 步骤2：完整卡片HTML（使用单引号包裹style，避免与双引号冲突）
-            card_html = f'''
-            <div style='background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;
-                        box-shadow:0 2px 4px rgba(0,0,0,.1);border-left:4px solid {color};'>
-                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>
-                    <span style='font-size:1.1em;font-weight:600;'>{stock}</span>
-                    <span style='background:{color};color:#fff;border-radius:4px;padding:2px 8px;font-size:0.8em;'>
+            # 完整的卡片HTML
+            card_html = f"""
+            <div style="background:#fff;border-radius:8px;padding:12px;margin-bottom:8px;
+                        box-shadow:0 2px 4px rgba(0,0,0,.1);border-left:4px solid {color};">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span style="font-size:1.1em;font-weight:600;">{stock}</span>
+                    <span style="background:{color};color:#fff;border-radius:4px;padding:2px 8px;font-size:0.8em;">
                         {target_type}目标
                     </span>
                 </div>
-                <div style='font-size:0.9em;color:#666;margin-bottom:4px;'>
+                <div style="font-size:0.9em;color:#666;margin-bottom:4px;">
                     基准价：{breakdown_base:.3f} | 反弹比例：{rebound_pct:.1f}%
                 </div>
-                <div style='font-size:0.9em;color:#666;margin-bottom:4px;'>
+                <div style="font-size:0.9em;color:#666;margin-bottom:4px;">
                     跌破后最低价：{lowest_price:.3f} | 阶段：{phase_text}
                 </div>
-                {target_html}
-                <div style='font-size:0.7em;color:#aaa;margin-top:6px;'>
+                {target_price_html}
+                <div style="font-size:0.7em;color:#aaa;margin-top:6px;">
                     最后更新：{config['last_updated'] or '未更新'}
                 </div>
             </div>
-            '''
+            """
             
-            # 渲染卡片（确保unsafe_allow_html=True生效）
+            # 渲染卡片（使用unsafe_allow_html=True确保HTML正确渲染）
             with cols[idx % 2]:
                 st.markdown(card_html, unsafe_allow_html=True)
 
-    # 4) 批量更新最低价（快捷操作）
+    # 5) 批量更新最低价（快捷操作）
     with st.expander("⚡ 批量更新跌破后最低价", expanded=False):
         st.warning("仅更新「跌破中」/「反弹中」阶段的股票最低价")
         update_stocks = [s for s in targets_dict if targets_dict[s]["trend_phase"] in ["跌破中", "反弹中"]]
         if update_stocks:
+            # 存储需要更新的最低价
+            updated_lows = {}
             for stock in update_stocks:
                 current_low = targets_dict[stock]["lowest_price"]
                 new_low = st.number_input(
@@ -676,20 +714,30 @@ elif choice == "🎯 价格目标管理":
                     key=f"batch_low_{stock}"
                 )
                 if new_low != current_low:
+                    updated_lows[stock] = new_low
+            
+            # 批量保存按钮
+            if st.button("💾 保存所有最低价更新") and updated_lows:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                for stock, new_low in updated_lows.items():
                     c.execute("""
                         UPDATE price_targets 
                         SET lowest_price = ?, last_updated = ? 
                         WHERE code = ?
-                    """, (new_low, datetime.now().strftime("%Y-%m-%d %H:%M"), stock))
-                    conn.commit()
-            if st.button("💾 保存所有最低价更新"):
+                    """, (new_low, now_str, stock))
+                conn.commit()
+                # 同步到GitHub
                 thread = threading.Thread(target=sync_db_to_github, daemon=True)
                 thread.start()
-                st.success("最低价已批量更新！")
+                st.success(f"已更新 {len(updated_lows)} 只股票的最低价！")
                 st.rerun()
+            elif not updated_lows:
+                st.info("暂无需要更新的最低价")
         else:
             st.info("暂无处于「跌破中」/「反弹中」阶段的股票")
 
+# 关闭数据库连接（可选，根据你的应用架构调整）
+# conn.close()
 
 
 
@@ -962,6 +1010,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
