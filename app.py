@@ -450,19 +450,19 @@ elif choice == "💰 盈利账单":
 # --- 价格目标管理 ---
 elif choice == "🎯 价格目标管理":
     st.markdown("## 🎯 价格目标管理")
-    
+
     # ========== 数据库表结构升级 ==========
     def ensure_price_target_v2_table():
         c.execute("CREATE TABLE IF NOT EXISTS price_targets_v2 (code TEXT PRIMARY KEY, buy_high_point REAL, buy_drop_pct REAL, buy_break_status TEXT DEFAULT '未突破', buy_low_after_break REAL, sell_low_point REAL, sell_rise_pct REAL, sell_break_status TEXT DEFAULT '未突破', sell_high_after_break REAL, last_updated TEXT)")
         conn.commit()
-    
+
     ensure_price_target_v2_table()
-    
+
     # ========== 辅助函数 ==========
     def get_current_price(stock_code):
         result = c.execute("SELECT current_price FROM prices WHERE code = ?", (stock_code,)).fetchone()
         return float(result[0]) if result and result[0] else 0.0
-    
+
     def save_price_target_v2(code, data):
         c.execute("INSERT OR REPLACE INTO price_targets_v2 (code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, sell_low_point, sell_rise_pct, sell_break_status, sell_high_after_break, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (code, data.get('buy_high_point'), data.get('buy_drop_pct'), data.get('buy_break_status', '未突破'), data.get('buy_low_after_break'),
@@ -471,232 +471,277 @@ elif choice == "🎯 价格目标管理":
         conn.commit()
         thread = threading.Thread(target=sync_db_to_github, daemon=True)
         thread.start()
-    
+
     def load_price_target_v2(code):
         row = c.execute('SELECT * FROM price_targets_v2 WHERE code = ?', (code,)).fetchone()
         if row:
             return {'code': row[0], 'buy_high_point': row[1], 'buy_drop_pct': row[2], 'buy_break_status': row[3] or '未突破', 'buy_low_after_break': row[4],
                     'sell_low_point': row[5], 'sell_rise_pct': row[6], 'sell_break_status': row[7] or '未突破', 'sell_high_after_break': row[8]}
         return None
-    
+
+    def delete_price_target_v2(code):
+        c.execute('DELETE FROM price_targets_v2 WHERE code = ?', (code,))
+        conn.commit()
+        thread = threading.Thread(target=sync_db_to_github, daemon=True)
+        thread.start()
+
     # ========== 核心计算函数 ==========
     def calc_buy_target(config, current_price):
-        result = {'base_price': None, 'cycle_drop': None, 'buy_target': None, 'rebound_pct': None, 'to_base_pct': None}
+        result = {'base_price': None, 'cycle_drop': None, 'buy_target': None, 'rebound_pct': None, 'to_target_pct': None}
         high_point = config.get('buy_high_point')
         drop_pct = config.get('buy_drop_pct')
         if not high_point or not drop_pct:
             return result
         result['base_price'] = round(high_point * (1 - drop_pct / 100), 3)
-        if current_price > 0:
-            result['to_base_pct'] = round((result['base_price'] - current_price) / current_price * 100, 2)
         if config.get('buy_break_status') == '已突破':
             low_after_break = config.get('buy_low_after_break')
             if low_after_break:
                 result['cycle_drop'] = round(high_point - low_after_break, 3)
                 result['buy_target'] = round(low_after_break + result['cycle_drop'] * 0.382, 3)
                 result['rebound_pct'] = round((result['buy_target'] - low_after_break) / low_after_break * 100, 2)
+                if current_price > 0 and result['buy_target']:
+                    result['to_target_pct'] = round((result['buy_target'] - current_price) / current_price * 100, 2)
         return result
-    
+
     def calc_sell_target(config, current_price):
-        result = {'base_price': None, 'cycle_rise': None, 'sell_target': None, 'fallback_pct': None, 'to_base_pct': None}
+        result = {'base_price': None, 'cycle_rise': None, 'sell_target': None, 'fallback_pct': None, 'to_target_pct': None}
         low_point = config.get('sell_low_point')
         rise_pct = config.get('sell_rise_pct')
         if not low_point or not rise_pct:
             return result
         result['base_price'] = round(low_point * (1 + rise_pct / 100), 3)
-        if current_price > 0:
-            result['to_base_pct'] = round((result['base_price'] - current_price) / current_price * 100, 2)
         if config.get('sell_break_status') == '已突破':
             high_after_break = config.get('sell_high_after_break')
             if high_after_break:
                 result['cycle_rise'] = round(high_after_break - low_point, 3)
                 result['sell_target'] = round(high_after_break - result['cycle_rise'] * 0.618, 3)
                 result['fallback_pct'] = round((high_after_break - result['sell_target']) / high_after_break * 100, 2)
+                if current_price > 0 and result['sell_target']:
+                    result['to_target_pct'] = round((current_price - result['sell_target']) / result['sell_target'] * 100, 2)
         return result
-    
-    # ========== 页面布局 ==========
+
+    # ========== 获取所有监控数据 ==========
     all_stocks = get_dynamic_stock_list()
-    col_select, col_info = st.columns([2, 3])
-    with col_select:
+    all_configs = c.execute("SELECT * FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL").fetchall()
+
+    # 构建监控列表数据
+    monitor_items = []
+    for row in all_configs:
+        code = row[0]
+        buy_config = {'buy_high_point': row[1], 'buy_drop_pct': row[2], 'buy_break_status': row[3], 'buy_low_after_break': row[4]}
+        sell_config = {'sell_low_point': row[5], 'sell_rise_pct': row[6], 'sell_break_status': row[7], 'sell_high_after_break': row[8]}
+        curr_price = get_current_price(code)
+
+        # 买入体系
+        if buy_config['buy_high_point'] and buy_config['buy_drop_pct']:
+            buy_calc = calc_buy_target(buy_config, curr_price)
+            if buy_config['buy_break_status'] == '已突破' and buy_calc['buy_target']:
+                monitor_items.append({
+                    'code': code,
+                    'type': '买入',
+                    'trend': '反弹中',
+                    'target_price': buy_calc['buy_target'],
+                    'current_price': curr_price,
+                    'to_target_pct': buy_calc['to_target_pct'],
+                    'break_status': '已突破'
+                })
+            elif buy_config['buy_break_status'] == '未突破':
+                monitor_items.append({
+                    'code': code,
+                    'type': '买入',
+                    'trend': '等待突破',
+                    'target_price': buy_calc['base_price'],
+                    'current_price': curr_price,
+                    'to_target_pct': round((buy_calc['base_price'] - curr_price) / curr_price * 100, 2) if curr_price > 0 else None,
+                    'break_status': '未突破'
+                })
+
+        # 卖出体系
+        if sell_config['sell_low_point'] and sell_config['sell_rise_pct']:
+            sell_calc = calc_sell_target(sell_config, curr_price)
+            if sell_config['sell_break_status'] == '已突破' and sell_calc['sell_target']:
+                monitor_items.append({
+                    'code': code,
+                    'type': '卖出',
+                    'trend': '回调中',
+                    'target_price': sell_calc['sell_target'],
+                    'current_price': curr_price,
+                    'to_target_pct': sell_calc['to_target_pct'],
+                    'break_status': '已突破'
+                })
+            elif sell_config['sell_break_status'] == '未突破':
+                monitor_items.append({
+                    'code': code,
+                    'type': '卖出',
+                    'trend': '等待突破',
+                    'target_price': sell_calc['base_price'],
+                    'current_price': curr_price,
+                    'to_target_pct': round((sell_calc['base_price'] - curr_price) / curr_price * 100, 2) if curr_price > 0 else None,
+                    'break_status': '未突破'
+                })
+
+    # ========== 1. 主要监控窗口（醒目卡片）==========
+    st.subheader("📊 实时监控")
+
+    if monitor_items:
+        # 按距离目标百分比排序（绝对值小的在前）
+        monitor_items.sort(key=lambda x: abs(x['to_target_pct']) if x['to_target_pct'] is not None else float('inf'))
+
+        # 每行显示3个卡片
+        cols_per_row = 3
+        for i in range(0, len(monitor_items), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, item in enumerate(monitor_items[i:i+cols_per_row]):
+                with cols[j]:
+                    is_buy = item['type'] == '买入'
+                    color = "#22c55e" if is_buy else "#ef4444"  # 绿色买入，红色卖出
+                    trend_color = "#3b82f6" if item['trend'] == '等待突破' else color
+
+                    # 距离百分比显示
+                    if item['to_target_pct'] is not None:
+                        if item['to_target_pct'] > 0:
+                            pct_text = f"还差 {item['to_target_pct']:.2f}%"
+                        else:
+                            pct_text = f"已超出 {abs(item['to_target_pct']):.2f}%"
+                    else:
+                        pct_text = "-"
+
+                    # 突破状态标签
+                    break_badge = "🟢" if item['break_status'] == '已突破' else "⏳"
+
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-radius: 12px; padding: 16px; margin-bottom: 12px; border-left: 4px solid {color}; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <span style="font-size: 1.2em; font-weight: bold; color: #f8fafc;">{item['code']}</span>
+                            <span style="background: {color}; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">{item['type']}</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="color: #94a3b8; font-size: 0.9em;">趋势:</span>
+                            <span style="color: {trend_color}; font-weight: 600;">{break_badge} {item['trend']}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <span style="color: #94a3b8; font-size: 0.9em;">目标价:</span>
+                            <span style="color: #f8fafc; font-size: 1.4em; font-weight: bold;">{item['target_price']:.3f}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <span style="color: #94a3b8; font-size: 0.9em;">当前价:</span>
+                            <span style="color: #cbd5e1; font-size: 1.1em;">{item['current_price']:.3f}" if item['current_price'] > 0 else "未设置" + "</span>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px; text-align: center;">
+                            <span style="color: #fbbf24; font-size: 1.1em; font-weight: bold;">📊 {pct_text}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("📌 暂无价格目标监控，请在下方配置")
+
+    st.divider()
+
+    # ========== 2. 配置区域（展开/折叠）==========
+    with st.expander("⚙️ 配置价格目标", expanded=False):
+        all_stocks = get_dynamic_stock_list()
         selected_stock = st.selectbox("📌 选择股票", [""] + all_stocks, key="pt_stock_select")
-    if not selected_stock:
-        st.info("👆 请先选择要配置价格目标的股票")
-        st.stop()
-    current_price = get_current_price(selected_stock)
-    existing_config = load_price_target_v2(selected_stock) or {'buy_high_point': None, 'buy_drop_pct': None, 'buy_break_status': '未突破', 'buy_low_after_break': None, 'sell_low_point': None, 'sell_rise_pct': None, 'sell_break_status': '未突破', 'sell_high_after_break': None}
-    with col_info:
-        price_display = f"{current_price:.3f}" if current_price > 0 else "未设置"
-        st.markdown(f"**当前股票:** `{selected_stock}`　　**当前价格:** `{price_display}`")
+
+        if selected_stock:
+            current_price = get_current_price(selected_stock)
+            existing_config = load_price_target_v2(selected_stock) or {'buy_high_point': None, 'buy_drop_pct': None, 'buy_break_status': '未突破', 'buy_low_after_break': None, 'sell_low_point': None, 'sell_rise_pct': None, 'sell_break_status': '未突破', 'sell_high_after_break': None}
+
+            st.markdown(f"**当前股票:** `{selected_stock}`　　**当前价格:** `{current_price:.3f}" if current_price > 0 else "未设置" + "`")
+
+            col_buy, col_sell = st.columns(2)
+
+            # 买入体系配置
+            with col_buy:
+                st.markdown("#### 🔴 买入价体系（前期高点下跌）")
+                with st.container(border=True):
+                    buy_high = st.number_input("前期高点价位", value=float(existing_config['buy_high_point']) if existing_config.get('buy_high_point') else None, step=0.001, format="%.3f", key="buy_high_point")
+                    buy_drop = st.number_input("下跌幅度 (%)", value=float(existing_config['buy_drop_pct']) if existing_config.get('buy_drop_pct') else None, step=0.1, format="%.2f", key="buy_drop_pct")
+                    buy_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('buy_break_status') != '已突破' else 1, key="buy_break_status")
+                    buy_low_after = None
+                    if buy_break == "已突破":
+                        buy_low_after = st.number_input("突破后最低价", value=float(existing_config['buy_low_after_break']) if existing_config.get('buy_low_after_break') else None, step=0.001, format="%.3f", key="buy_low_after_break")
+
+            # 卖出体系配置
+            with col_sell:
+                st.markdown("#### 🟢 卖出价体系（前期低点上涨）")
+                with st.container(border=True):
+                    sell_low = st.number_input("前期低点价位", value=float(existing_config['sell_low_point']) if existing_config.get('sell_low_point') else None, step=0.001, format="%.3f", key="sell_low_point")
+                    sell_rise = st.number_input("上涨幅度 (%)", value=float(existing_config['sell_rise_pct']) if existing_config.get('sell_rise_pct') else None, step=0.1, format="%.2f", key="sell_rise_pct")
+                    sell_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('sell_break_status') != '已突破' else 1, key="sell_break_status")
+                    sell_high_after = None
+                    if sell_break == "已突破":
+                        sell_high_after = st.number_input("突破后最高价", value=float(existing_config['sell_high_after_break']) if existing_config.get('sell_high_after_break') else None, step=0.001, format="%.3f", key="sell_high_after_break")
+
+            # 保存按钮
+            col_save, col_delete = st.columns([1, 1])
+            with col_save:
+                if st.button("💾 保存配置", type="primary"):
+                    config_data = {'buy_high_point': buy_high, 'buy_drop_pct': buy_drop, 'buy_break_status': buy_break, 'buy_low_after_break': buy_low_after, 'sell_low_point': sell_low, 'sell_rise_pct': sell_rise, 'sell_break_status': sell_break, 'sell_high_after_break': sell_high_after}
+                    save_price_target_v2(selected_stock, config_data)
+                    st.success("✅ 配置已保存")
+                    st.rerun()
+            with col_delete:
+                if st.button("🗑️ 删除配置", type="secondary"):
+                    delete_price_target_v2(selected_stock)
+                    st.warning("⚠️ 配置已删除")
+                    st.rerun()
+        else:
+            st.info("👆 请选择要配置的股票")
+
     st.divider()
-    st.subheader("⚙️ 手动配置区")
-    col_buy, col_sell = st.columns(2)
-    
-    # ===== 买入体系配置 =====
-    with col_buy:
-        st.markdown("#### 🔴 买入价体系（前期高点下跌）")
-        with st.container(border=True):
-            buy_high = st.number_input("前期高点价位", value=float(existing_config['buy_high_point']) if existing_config.get('buy_high_point') else None, step=0.001, format="%.3f", key="buy_high_point", help="设置前期高点价位，用于计算基准价")
-            buy_drop = st.number_input("下跌幅度 (%)", value=float(existing_config['buy_drop_pct']) if existing_config.get('buy_drop_pct') else None, step=0.1, format="%.2f", key="buy_drop_pct", help="从高点下跌的百分比，如10代表10%")
-            buy_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('buy_break_status') != '已突破' else 1, key="buy_break_status")
-            buy_low_after = None
-            if buy_break == "已突破":
-                buy_low_after = st.number_input("突破后最低价", value=float(existing_config['buy_low_after_break']) if existing_config.get('buy_low_after_break') else None, step=0.001, format="%.3f", key="buy_low_after_break", help="标记突破后至今的最低价")
-            if buy_break == "已突破":
-                st.markdown("**趋势类型:** `反弹中`")
-    
-    # ===== 卖出体系配置 =====
-    with col_sell:
-        st.markdown("#### 🟢 卖出价体系（前期低点上涨）")
-        with st.container(border=True):
-            sell_low = st.number_input("前期低点价位", value=float(existing_config['sell_low_point']) if existing_config.get('sell_low_point') else None, step=0.001, format="%.3f", key="sell_low_point", help="设置前期低点价位，用于计算基准价")
-            sell_rise = st.number_input("上涨幅度 (%)", value=float(existing_config['sell_rise_pct']) if existing_config.get('sell_rise_pct') else None, step=0.1, format="%.2f", key="sell_rise_pct", help="从低点上涨的百分比，如10代表10%")
-            sell_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('sell_break_status') != '已突破' else 1, key="sell_break_status")
-            sell_high_after = None
-            if sell_break == "已突破":
-                sell_high_after = st.number_input("突破后最高价", value=float(existing_config['sell_high_after_break']) if existing_config.get('sell_high_after_break') else None, step=0.001, format="%.3f", key="sell_high_after_break", help="标记突破后至今的最高价")
-            if sell_break == "已突破":
-                st.markdown("**趋势类型:** `回调中`")
-    
-    # ---- 保存配置按钮 ----
-    col_save, _ = st.columns([1, 4])
-    with col_save:
-        if st.button("💾 保存配置", type="primary"):
-            config_data = {'buy_high_point': buy_high, 'buy_drop_pct': buy_drop, 'buy_break_status': buy_break, 'buy_low_after_break': buy_low_after, 'sell_low_point': sell_low, 'sell_rise_pct': sell_rise, 'sell_break_status': sell_break, 'sell_high_after_break': sell_high_after}
-            save_price_target_v2(selected_stock, config_data)
-            st.success("✅ 配置已保存")
-            st.rerun()
-    
-    st.divider()
-    
-    # ========== 监控页显示区 ==========
-    st.subheader("📊 价格目标监控")
-    config_for_calc = {'buy_high_point': buy_high, 'buy_drop_pct': buy_drop, 'buy_break_status': buy_break, 'buy_low_after_break': buy_low_after, 'sell_low_point': sell_low, 'sell_rise_pct': sell_rise, 'sell_break_status': sell_break, 'sell_high_after_break': sell_high_after}
-    buy_calc = calc_buy_target(config_for_calc, current_price)
-    sell_calc = calc_sell_target(config_for_calc, current_price)
-    buy_active = buy_high is not None and buy_drop is not None
-    sell_active = sell_low is not None and sell_rise is not None
-    if not buy_active and not sell_active:
-        st.info("📌 请在上方配置买入或卖出体系参数")
-    
-    # ===== 买入体系显示模块 =====
-    if buy_active:
-        st.markdown("---")
-        st.markdown("#### 🔴 买入价体系监控")
-        with st.container(border=True):
-            st.markdown("**📋 基础配置**")
-            cols = st.columns(3)
-            cols[0].metric("前期高点", f"{buy_high:.3f}")
-            cols[1].metric("下跌幅度", f"{buy_drop:.2f}%")
-            if buy_calc['base_price']:
-                cols[2].metric("基准价", f"{buy_calc['base_price']:.3f}")
-            if buy_break == "未突破":
-                st.markdown("**⏳ 突破进度**")
-                if buy_calc['to_base_pct'] is not None:
-                    if buy_calc['to_base_pct'] > 0:
-                        st.info(f"📉 距离基准价还差 **{buy_calc['to_base_pct']:.2f}%** 突破")
-                    elif buy_calc['to_base_pct'] <= 0:
-                        st.success(f"🎯 当前价格已突破基准价！还差 **{abs(buy_calc['to_base_pct']):.2f}%**")
-                else:
-                    st.info("📉 等待价格数据...")
-            else:
-                st.markdown("**✅ 突破后数据**")
-                cols2 = st.columns(3)
-                if buy_low_after:
-                    cols2[0].metric("突破后最低价", f"{buy_low_after:.3f}")
-                else:
-                    cols2[0].metric("突破后最低价", "-")
-                if buy_calc['buy_target']:
-                    cols2[1].metric("买入价目标", f"{buy_calc['buy_target']:.3f}", delta=f"基于{buy_low_after:.3f}")
-                else:
-                    cols2[1].metric("买入价目标", "-")
-                st.markdown("**📈 核心比例**")
-                cols3 = st.columns(3)
-                if buy_calc['rebound_pct'] is not None:
-                    cols3[0].metric("低价→买入价反弹", f"{buy_calc['rebound_pct']:.2f}%")
-                else:
-                    cols3[0].metric("低价→买入价反弹", "-")
-                if current_price > 0 and buy_calc['buy_target']:
-                    to_buy_pct = round((buy_calc['buy_target'] - current_price) / current_price * 100, 2)
-                    if to_buy_pct > 0:
-                        cols3[1].metric("当前价距离买入价", f"还差 {to_buy_pct:.2f}%")
-                    else:
-                        cols3[1].metric("当前价距离买入价", f"已超出 {abs(to_buy_pct):.2f}%")
-                else:
-                    cols3[1].metric("当前价距离买入价", "-")
-                st.markdown("**🏷️ 状态标签**")
-                st.success("✅ 已突破基准价　|　趋势: **反弹中**")
-    
-    # ===== 卖出体系显示模块 =====
-    if sell_active:
-        st.markdown("---")
-        st.markdown("#### 🟢 卖出价体系监控")
-        with st.container(border=True):
-            st.markdown("**📋 基础配置**")
-            cols = st.columns(3)
-            cols[0].metric("前期低点", f"{sell_low:.3f}")
-            cols[1].metric("上涨幅度", f"{sell_rise:.2f}%")
-            if sell_calc['base_price']:
-                cols[2].metric("基准价", f"{sell_calc['base_price']:.3f}")
-            if sell_break == "未突破":
-                st.markdown("**⏳ 突破进度**")
-                if sell_calc['to_base_pct'] is not None:
-                    if sell_calc['to_base_pct'] > 0:
-                        st.info(f"📈 距离基准价还差 **{sell_calc['to_base_pct']:.2f}%** 突破")
-                    elif sell_calc['to_base_pct'] <= 0:
-                        st.success(f"🎯 当前价格已突破基准价！超出 **{abs(sell_calc['to_base_pct']):.2f}%**")
-                else:
-                    st.info("📈 等待价格数据...")
-            else:
-                st.markdown("**✅ 突破后数据**")
-                cols2 = st.columns(3)
-                if sell_high_after:
-                    cols2[0].metric("突破后最高价", f"{sell_high_after:.3f}")
-                else:
-                    cols2[0].metric("突破后最高价", "-")
-                if sell_calc['sell_target']:
-                    cols2[1].metric("卖出价目标", f"{sell_calc['sell_target']:.3f}", delta=f"基于{sell_high_after:.3f}")
-                else:
-                    cols2[1].metric("卖出价目标", "-")
-                st.markdown("**📉 核心比例**")
-                cols3 = st.columns(3)
-                if sell_calc['fallback_pct'] is not None:
-                    cols3[0].metric("高价→卖出价回落", f"{sell_calc['fallback_pct']:.2f}%")
-                else:
-                    cols3[0].metric("高价→卖出价回落", "-")
-                if current_price > 0 and sell_calc['sell_target']:
-                    to_sell_pct = round((current_price - sell_calc['sell_target']) / sell_calc['sell_target'] * 100, 2)
-                    if to_sell_pct > 0:
-                        cols3[1].metric("当前价距离卖出价", f"超出 {to_sell_pct:.2f}%")
-                    else:
-                        cols3[1].metric("当前价距离卖出价", f"还差 {abs(to_sell_pct):.2f}%")
-                else:
-                    cols3[1].metric("当前价距离卖出价", "-")
-                st.markdown("**🏷️ 状态标签**")
-                st.success("✅ 已突破基准价　|　趋势: **回调中**")
-    
-    st.divider()
-    
-    # ========== 所有股票监控概览 ==========
-    st.subheader("📋 所有股票监控概览")
-    all_configs = c.execute("SELECT code, buy_high_point, buy_drop_pct, buy_break_status, sell_low_point, sell_rise_pct, sell_break_status FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL").fetchall()
+
+    # ========== 3. 详细数据窗口（普通表格）==========
+    st.subheader("📋 监控参数详情")
+
     if all_configs:
-        overview_data = []
+        detail_data = []
         for row in all_configs:
-            code, b_high, b_drop, b_break, s_low, s_rise, s_break = row
+            code, b_high, b_drop, b_break, b_low, s_low, s_rise, s_break, s_high, _ = row
             curr_p = get_current_price(code)
+
+            # 买入体系详情
             if b_high and b_drop:
                 buy_base = round(b_high * (1 - b_drop / 100), 3)
-                to_base = round((buy_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
-                overview_data.append({'股票': code, '体系': '买入', '状态': b_break, '基准价': buy_base, '当前价': curr_p if curr_p > 0 else '-', '距离目标': f"{to_base:.2f}%" if to_base is not None else '-'})
+                if b_break == '已突破' and b_low:
+                    cycle_drop = round(b_high - b_low, 3)
+                    buy_target = round(b_low + cycle_drop * 0.382, 3)
+                    to_target = round((buy_target - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+                else:
+                    buy_target = '-'
+                    to_target = round((buy_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+
+                detail_data.append({
+                    '股票': code, '体系': '买入', '突破状态': b_break,
+                    '前期高点': b_high, '下跌幅度': f"{b_drop:.2f}%", '基准价': buy_base,
+                    '突破后极值': b_low if b_low else '-', '目标价': buy_target,
+                    '当前价': curr_p if curr_p > 0 else '-',
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                })
+
+            # 卖出体系详情
             if s_low and s_rise:
                 sell_base = round(s_low * (1 + s_rise / 100), 3)
-                to_base = round((sell_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
-                overview_data.append({'股票': code, '体系': '卖出', '状态': s_break, '基准价': sell_base, '当前价': curr_p if curr_p > 0 else '-', '距离目标': f"{to_base:.2f}%" if to_base is not None else '-'})
-        if overview_data:
-            df_overview = pd.DataFrame(overview_data)
-            st.dataframe(df_overview, use_container_width=True, hide_index=True)
+                if s_break == '已突破' and s_high:
+                    cycle_rise = round(s_high - s_low, 3)
+                    sell_target = round(s_high - cycle_rise * 0.618, 3)
+                    to_target = round((curr_p - sell_target) / sell_target * 100, 2) if curr_p > 0 else None
+                else:
+                    sell_target = '-'
+                    to_target = round((sell_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+
+                detail_data.append({
+                    '股票': code, '体系': '卖出', '突破状态': s_break,
+                    '前期低点': s_low, '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
+                    '突破后极值': s_high if s_high else '-', '目标价': sell_target,
+                    '当前价': curr_p if curr_p > 0 else '-',
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                })
+
+        if detail_data:
+            df_detail = pd.DataFrame(detail_data)
+            st.dataframe(df_detail, use_container_width=True, hide_index=True)
         else:
-            st.info("暂无有效配置")
+            st.info("暂无有效配置数据")
     else:
         st.info("暂无价格目标配置")
 
