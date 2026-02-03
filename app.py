@@ -573,7 +573,7 @@ def save_price_target(stock, base_price, rebound_percent, trend_direction,
 
 
 # --- 交易录入 ---
-elif choice == "📝 交易录入":
+elif choice == "📝 trade_entry":
     st.header("📝 交易录入")
     full_list = get_dynamic_stock_list()
     t_code = st.selectbox("选择股票", options=["【添加新股票】"] + full_list, index=None)
@@ -835,6 +835,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
