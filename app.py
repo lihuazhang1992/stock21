@@ -447,14 +447,16 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-# --- 价格目标管理 (修正版：显示相对极值点的百分比) ---
+# --- 价格目标管理 (最终修正版：正确显示相对于极值点的百分比) ---
 elif choice == "🎯 价格目标管理":
     st.header("🎯 智能价格目标管理")
     
     def format_price(num):
         if pd.isna(num) or num is None or num == 0:
             return "0"
-        return f"{num:.4f}".rstrip('0').rstrip('.')
+        s = f"{num:.4f}"
+        s = s.rstrip('0').rstrip('.')
+        return s if s else "0"
     
     def format_pct(num):
         if pd.isna(num) or num is None:
@@ -516,6 +518,7 @@ elif choice == "🎯 价格目标管理":
             
             # 计算显示
             st.markdown("---")
+            st.markdown("**📊 系统自动计算结果**")
             
             if pre_high > pre_low and base_price > 0:
                 total_range = pre_high - pre_low  # 绝对波动值
@@ -524,30 +527,30 @@ elif choice == "🎯 价格目标管理":
                 # 买入价 = 前期最低价 + (前期高点-低点) × 38.2%
                 rebound_abs = total_range * 0.382  # 反弹绝对值（价格差）
                 buy_price = pre_low + rebound_abs
-                # 【关键修正】相对于最低价的涨幅百分比：(反弹绝对值 ÷ 最低价) × 100%
-                # 如例子：10.75 × 38.2% = 4.09575，然后 4.09575 ÷ 69.35 × 100% = 5.91%
+                # 【核心修正】相对于最低价的涨幅百分比：(反弹绝对值 ÷ 最低价) × 100%
+                # 例子：10.75 * 0.382 = 4.10565，然后 4.10565 / 69.35 * 100 = 5.92%
                 rebound_pct_display = (rebound_abs / pre_low) * 100
                 
                 # ========== 卖出价计算（突破回落）==========
                 # 卖出价 = 前期最高价 - (前期高点-低点) × 61.8%
                 fallback_abs = total_range * 0.618  # 回落绝对值（价格差）
                 sell_price = pre_high - fallback_abs
-                # 【关键修正】相对于最高价的跌幅百分比：(回落绝对值 ÷ 最高价) × 100%
+                # 【核心修正】相对于最高价的跌幅百分比：(回落绝对值 ÷ 最高价) × 100%
                 fallback_pct_display = (fallback_abs / pre_high) * 100
                 
                 # 显示计算结果
-                calc_cols = st.columns(2)
+                calc_cols = st.columns(3)
                 
                 with calc_cols[0]:
                     st.markdown(f"""
                     <div style="background:#e3f2fd;padding:12px;border-radius:8px;border-left:4px solid #1976d2;">
-                        <div style="color:#1976d2;font-weight:bold;margin-bottom:4px;">🟢 买入目标（突破反弹）</div>
-                        <div style="font-size:1.4em;font-weight:bold;color:#1976d2;margin:4px 0;">
+                        <div style="color:#1976d2;font-weight:bold;margin-bottom:4px;">🟢 买入目标</div>
+                        <div style="font-size:1.5em;font-weight:bold;color:#1976d2;margin:4px 0;">
                             {format_price(buy_price)}
                         </div>
-                        <div style="font-size:0.85em;color:#666;line-height:1.6;">
-                            计算: {format_price(pre_low)} + {format_price(rebound_abs)} = {format_price(buy_price)}<br>
-                            <b>反弹比例: {rebound_pct_display:.2f}%</b> (相对于最低价)
+                        <div style="font-size:0.85em;color:#666;line-height:1.5;">
+                            从最低价反弹<br>
+                            <b style="color:#1976d2;">{rebound_pct_display:.2f}%</b>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -555,16 +558,33 @@ elif choice == "🎯 价格目标管理":
                 with calc_cols[1]:
                     st.markdown(f"""
                     <div style="background:#fce4ec;padding:12px;border-radius:8px;border-left:4px solid #c2185b;">
-                        <div style="color:#c2185b;font-weight:bold;margin-bottom:4px;">🔴 卖出目标（突破回落）</div>
-                        <div style="font-size:1.4em;font-weight:bold;color:#c2185b;margin:4px 0;">
+                        <div style="color:#c2185b;font-weight:bold;margin-bottom:4px;">🔴 卖出目标</div>
+                        <div style="font-size:1.5em;font-weight:bold;color:#c2185b;margin:4px 0;">
                             {format_price(sell_price)}
                         </div>
-                        <div style="font-size:0.85em;color:#666;line-height:1.6;">
-                            计算: {format_price(pre_high)} - {format_price(fallback_abs)} = {format_price(sell_price)}<br>
-                            <b>回落比例: {fallback_pct_display:.2f}%</b> (相对于最高价)
+                        <div style="font-size:0.85em;color:#666;line-height:1.5;">
+                            从最高价回落<br>
+                            <b style="color:#c2185b;">{fallback_pct_display:.2f}%</b>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                with calc_cols[2]:
+                    # 距基准价
+                    if curr_price > 0:
+                        dist_to_base = (curr_price - base_price) / base_price * 100
+                        color = "#4caf50" if dist_to_base >= 0 else "#f44336"
+                        st.markdown(f"""
+                        <div style="background:#f3e5f5;padding:12px;border-radius:8px;border-left:4px solid #9c27b0;">
+                            <div style="color:#9c27b0;font-weight:bold;margin-bottom:4px;">📍 距基准价</div>
+                            <div style="font-size:1.5em;font-weight:bold;color:{color};margin:4px 0;">
+                                {format_pct(dist_to_base)}
+                            </div>
+                            <div style="font-size:0.85em;color:#666;">
+                                基准: {format_price(base_price)}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
             else:
                 st.warning("请输入有效的前期高低点和基准价（最高价 > 最低价 > 0）")
             
@@ -593,6 +613,14 @@ elif choice == "🎯 价格目标管理":
     if not active_targets:
         st.info("暂无价格监控，请先添加")
     else:
+        # 表头
+        header_cols = st.columns([1.2, 2, 2.2, 1.2, 1.5])
+        header_cols[0].markdown("**股票**")
+        header_cols[1].markdown("**现价 vs 目标**")
+        header_cols[2].markdown("**目标价详情**")
+        header_cols[3].markdown("**趋势**")
+        header_cols[4].markdown("**反弹/回落比例**")
+        
         for target in active_targets:
             stock, base, pre_h, pre_l, trend = target
             curr = current_prices.get(stock, 0.0)
@@ -603,20 +631,21 @@ elif choice == "🎯 价格目标管理":
             total_range = pre_h - pre_l
             
             # 计算目标价和显示比例
-            # 【关键修正】显示相对于极值点的百分比，而不是38.2%/61.8%
             rebound_abs = total_range * 0.382
             buy_price = pre_l + rebound_abs
-            rebound_pct_display = (rebound_abs / pre_l) * 100  # 如例子中的5.91%
+            # 【核心修正】计算相对于最低价的涨幅百分比
+            rebound_pct_display = (rebound_abs / pre_l) * 100
             
             fallback_abs = total_range * 0.618
             sell_price = pre_h - fallback_abs
+            # 【核心修正】计算相对于最高价的跌幅百分比  
             fallback_pct_display = (fallback_abs / pre_h) * 100
             
             # 判断突破状态
             has_breakout = curr >= base
             
             with st.container():
-                cols = st.columns([1.5, 2, 2.5, 1.5, 2])
+                cols = st.columns([1.2, 2, 2.2, 1.2, 1.5])
                 
                 # 列1: 股票信息
                 with cols[0]:
@@ -667,19 +696,21 @@ elif choice == "🎯 价格目标管理":
                     if trend in ["未突破", "突破基数", "突破反弹"]:
                         st.markdown(f"""
                         <div style="font-size:0.9em;">
-                            <span style="color:#1976d2;">买入目标: {format_price(buy_price)}</span><br>
-                            <span style="font-size:0.8em;color:#666;">
-                                从{format_price(pre_l)}反弹 {rebound_pct_display:.2f}%
-                            </span>
+                            <div style="color:#1976d2;font-weight:bold;">买入: {format_price(buy_price)}</div>
+                            <div style="font-size:0.8em;color:#666;">
+                                {format_price(pre_l)} + {format_price(rebound_abs)}
+                                <span style="color:#1976d2;">({rebound_pct_display:.2f}%)</span>
+                            </div>
                         </div>
                         """, unsafe_allow_html=True)
                     else:  # 突破回落
                         st.markdown(f"""
                         <div style="font-size:0.9em;">
-                            <span style="color:#c2185b;">卖出目标: {format_price(sell_price)}</span><br>
-                            <span style="font-size:0.8em;color:#666;">
-                                从{format_price(pre_h)}回落 {fallback_pct_display:.2f}%
-                            </span>
+                            <div style="color:#c2185b;font-weight:bold;">卖出: {format_price(sell_price)}</div>
+                            <div style="font-size:0.8em;color:#666;">
+                                {format_price(pre_h)} - {format_price(fallback_abs)}
+                                <span style="color:#c2185b;">({fallback_pct_display:.2f}%)</span>
+                            </div>
                         </div>
                         """, unsafe_allow_html=True)
                 
@@ -701,24 +732,24 @@ elif choice == "🎯 价格目标管理":
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # 列5: 【关键修正】显示相对于极值点的百分比，而不是38.2%
+                # 列5: 【最终修正】显示相对于极值点的百分比（5.91%而不是38.2%）
                 with cols[4]:
                     if trend in ["突破反弹"]:
                         st.markdown(f"""
                         <div style="text-align:center;">
-                            <div style="font-size:1.2em;font-weight:bold;color:#1976d2;">
+                            <div style="font-size:1.4em;font-weight:bold;color:#1976d2;">
                                 {rebound_pct_display:.2f}%
                             </div>
-                            <div style="font-size:0.75em;color:#666;">反弹比例</div>
+                            <div style="font-size:0.75em;color:#666;">从最低价反弹</div>
                         </div>
                         """, unsafe_allow_html=True)
                     elif trend == "突破回落":
                         st.markdown(f"""
                         <div style="text-align:center;">
-                            <div style="font-size:1.2em;font-weight:bold;color:#c2185b;">
+                            <div style="font-size:1.4em;font-weight:bold;color:#c2185b;">
                                 {fallback_pct_display:.2f}%
                             </div>
-                            <div style="font-size:0.75em;color:#666;">回落比例</div>
+                            <div style="font-size:0.75em;color:#666;">从最高价回落</div>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
@@ -737,7 +768,6 @@ elif choice == "🎯 价格目标管理":
                     st.rerun()
                 
                 st.divider()
-
 
 
 
@@ -1006,6 +1036,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
