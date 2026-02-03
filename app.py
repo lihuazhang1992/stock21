@@ -505,58 +505,124 @@ elif choice == "🎯 价格目标管理":
                 st.success("已保存")
 
     # ---- 3. 栅格卡片（一排两张，紧凑） ----
-    st.subheader("当前监控")
+st.subheader("当前监控")
 
-    rows = []
-    for stock in all_stocks:
-        curr = current_prices.get(stock, 0.0)
-        if curr <= 0:
-            continue
-        t = targets_dict.get(stock, {})
-        base = t.get("base_price", 0.0)
-        p_high = t.get("prior_high", 0.0)
-        p_low = t.get("prior_low", 0.0)
-        b_low = t.get("break_low", 0.0)
-        b_high = t.get("break_high", 0.0)
-        trend = t.get("trend", "")
-        if p_high <= p_low or p_low == 0 or p_high == 0:
-            continue
-        if b_low > 0:
-            rebound_rate = (p_high - p_low) / p_low * 0.382
-            buy_price = b_low * (1 + rebound_rate)
-            buy_pct = abs((curr - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
-            rows.append([stock, "买入", buy_price, curr, buy_pct, trend, rebound_rate * 100, "反弹比例"])
-        if b_high > 0:
-            fallback_rate = (p_high - p_low) / p_high * 0.618
-            sell_price = b_high * (1 - fallback_rate)
-            sell_pct = abs((curr - sell_price) / sell_price) * 100 if sell_price > 0 else 0.0
-            rows.append([stock, "卖出", sell_price, curr, sell_pct, trend, fallback_rate * 100, "回落比例"])
+rows = []
 
-    if rows:
-        rows.sort(key=lambda x: x[4])  # 按距离升序
-        cols = st.columns(2)           # 一排两张卡片
-        for idx, r in enumerate(rows):
-            stock, direction, target, curr, pct, trend, prop, prop_type = r
-            color = "#4CAF50" if direction == "买入" else "#F44336"
-            with cols[idx % 2]:
-                st.markdown(f"""
-                <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
-                            padding:8px 10px;margin-bottom:4px;box-shadow:0 0 10px rgba(0,0,0,0.05);">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="font-size:1.05em;font-weight:600;">{stock}</span>
-                        <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
-                    </div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">趋势: {trend}</div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">目标 {target:.3f}　现价 {curr:.3f}</div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">{prop_type}: {prop:.2f}%</div>
-                    <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
-                        还差 {pct:.2f}%
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+for stock in all_stocks:
+    curr = current_prices.get(stock, 0.0)
+    if curr <= 0:
+        continue
+    
+    t = targets_dict.get(stock, {})
+    base       = t.get("base_price", 0.0)
+    p_high     = t.get("prior_high", 0.0)
+    p_low      = t.get("prior_low", 0.0)
+    b_low      = t.get("break_low", 0.0)     # 突破后的最低点
+    b_high     = t.get("break_high", 0.0)    # 突破后的最高点
+    trend      = t.get("trend", "待设置")
+    
+    if base <= 0:
+        continue  # 没有基准价就不显示
+    
+    # 计算是否已经突破（简单用现价是否越过基准价）
+    is_breakout = (curr > base) if trend in ["突破反弹", "突破回落"] else False
+    
+    # 准备显示的内容
+    if not is_breakout:
+        # ─────────────── 未突破阶段 ───────────────
+        distance_to_break = abs((curr - base) / base * 100) if base > 0 else 0
+        direction_to_break = "上涨" if curr < base else "下跌"
+        
+        rows.append([
+            stock,
+            "监控中（待突破）",
+            base,
+            curr,
+            distance_to_break,
+            trend,
+            0,           # 暂无反弹/回落比例
+            f"距基准 {direction_to_break}"
+        ])
+    
     else:
-        st.info("暂无基准价记录")
+        # ─────────────── 已突破阶段 ───────────────
+        if p_high <= p_low or p_low <= 0 or p_high <= 0:
+            continue  # 数据不完整，无法计算斐波那契
+        
+        fib_rebound = (p_high - p_low) / p_low * 0.382
+        fib_fallback = (p_high - p_low) / p_high * 0.618
+        
+        if b_low > 0 and trend == "突破反弹":
+            target_price = b_low * (1 + fib_rebound)
+            pct_diff = abs((curr - target_price) / target_price) * 100
+            rows.append([
+                stock,
+                "买入目标",
+                target_price,
+                curr,
+                pct_diff,
+                trend,
+                fib_rebound * 100,
+                "反弹38.2%"
+            ])
+        
+        if b_high > 0 and trend == "突破回落":
+            target_price = b_high * (1 - fib_fallback)
+            pct_diff = abs((curr - target_price) / target_price) * 100
+            rows.append([
+                stock,
+                "卖出目标",
+                target_price,
+                curr,
+                pct_diff,
+                trend,
+                fib_fallback * 100,
+                "回落61.8%"
+            ])
 
+# 排序：未突破的放前面（按距离突破从小到大），已突破的按距离目标排序
+pending_rows = [r for r in rows if "待突破" in r[1]]
+active_rows  = [r for r in rows if "待突破" not in r[1]]
+
+pending_rows.sort(key=lambda x: x[4])      # 距离突破近的优先
+active_rows.sort(key=lambda x: x[4])       # 距离目标近的优先
+
+display_rows = pending_rows + active_rows
+
+if display_rows:
+    cols = st.columns(2)
+    for idx, r in enumerate(display_rows):
+        stock, direction, target, curr, pct, trend_val, prop, prop_type = r
+        
+        if "待突破" in direction:
+            color = "#FF9800"  # 橙色 - 等待中
+        elif direction == "买入目标":
+            color = "#4CAF50"
+        else:
+            color = "#F44336"
+            
+        with cols[idx % 2]:
+            st.markdown(f"""
+            <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
+                        padding:10px;margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:1.1em;font-weight:600;">{stock}</span>
+                    <span style="background:{color};color:white;border-radius:4px;padding:2px 8px;font-size:0.85em;">{direction}</span>
+                </div>
+                <div style="font-size:0.85em;color:#555;margin:4px 0;">
+                    趋势：{trend_val}
+                </div>
+                <div style="font-size:0.9em;color:#333;">
+                    基准/目标价 <strong>{target:.3f}</strong>　现价 {curr:.3f}
+                </div>
+                <div style="font-size:0.85em;color:#666;margin-top:2px;">
+                    {prop_type}：{prop:.2f}%　　还差 <strong>{pct:.2f}%</strong>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.info("暂无任何价格目标监控记录")
 
 
 
@@ -826,6 +892,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
