@@ -449,22 +449,26 @@ elif choice == "💰 盈利账单":
 
 # --- 价格目标管理 ---
 elif choice == "🎯 价格目标管理":
-    # 1) 读取数据
-    try:
-        targets_raw = c.execute("SELECT code, buy_base, sell_base FROM price_targets").fetchall()
-    except sqlite3.OperationalError:
-        targets_raw = c.execute("SELECT code, base_price, 0.0 FROM price_targets").fetchall()
-    targets_dict = {r[0]: {"buy": r[1] or 0.0, "sell": r[2] or 0.0} for r in targets_raw}
-
+    # 动态增加新列
     def ensure_columns():
-        for col in ["buy_base", "sell_base"]:
+        for col in ["prior_high", "prior_low", "break_low", "break_high"]:
             try:
                 c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} REAL DEFAULT 0.0")
             except sqlite3.OperationalError:
                 pass
+        try:
+            c.execute("ALTER TABLE price_targets ADD COLUMN trend TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         thread = threading.Thread(target=sync_db_to_github, daemon=True)
         thread.start()
+
+    ensure_columns()
+
+    # 1) 读取数据
+    targets_raw = c.execute("SELECT code, base_price, prior_high, prior_low, break_low, break_high, trend FROM price_targets").fetchall()
+    targets_dict = {r[0]: {"base_price": r[1] or 0.0, "prior_high": r[2] or 0.0, "prior_low": r[3] or 0.0, "break_low": r[4] or 0.0, "break_high": r[5] or 0.0, "trend": r[6] or ""} for r in targets_raw}
 
     current_prices = {row[0]: row[1] or 0.0
                       for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
@@ -479,19 +483,22 @@ elif choice == "🎯 价格目标管理":
         if selected_stock:
             curr = current_prices.get(selected_stock, 0.0)
             st.caption(f"现价 **{curr:.3f}**" if curr > 0 else "暂无现价")
-            exist = targets_dict.get(selected_stock, {"buy": 0.0, "sell": 0.0})
-            buy_val = float(exist["buy"]) if exist["buy"] else 0.0
-            sell_val = float(exist["sell"]) if exist["sell"] else 0.0
-            buy_base = st.number_input("买入基准", value=buy_val, step=0.001, format="%.3f")
-            sell_base = st.number_input("卖出基准", value=sell_val, step=0.001, format="%.3f")
+            exist = targets_dict.get(selected_stock, {"base_price": 0.0, "prior_high": 0.0, "prior_low": 0.0, "break_low": 0.0, "break_high": 0.0, "trend": "突破基数"})
+            base_price = st.number_input("基准价", value=float(exist["base_price"]), step=0.001, format="%.3f")
+            prior_high = st.number_input("前期最高价", value=float(exist["prior_high"]), step=0.001, format="%.3f")
+            prior_low = st.number_input("前期最低价", value=float(exist["prior_low"]), step=0.001, format="%.3f")
+            break_low = st.number_input("突破后最低价 (买入)", value=float(exist["break_low"]), step=0.001, format="%.3f")
+            break_high = st.number_input("突破后最高价 (卖出)", value=float(exist["break_high"]), step=0.001, format="%.3f")
+            trend_options = ["突破基数", "突破反弹", "突破回落"]
+            trend_index = trend_options.index(exist["trend"]) if exist["trend"] in trend_options else 0
+            trend = st.selectbox("趋势", trend_options, index=trend_index)
             if st.button("保存", type="primary"):
-                ensure_columns()
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 c.execute("""
                     INSERT OR REPLACE INTO price_targets
-                    (code, buy_base, sell_base, last_updated)
-                    VALUES (?,?,?,?)
-                """, (selected_stock, buy_base, sell_base, now_str))
+                    (code, base_price, prior_high, prior_low, break_low, break_high, trend, last_updated)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (selected_stock, base_price, prior_high, prior_low, break_low, break_high, trend, now_str))
                 conn.commit()
                 thread = threading.Thread(target=sync_db_to_github, daemon=True)
                 thread.start()
@@ -505,31 +512,43 @@ elif choice == "🎯 价格目标管理":
         curr = current_prices.get(stock, 0.0)
         if curr <= 0:
             continue
-        t = targets_dict.get(stock, {"buy": 0.0, "sell": 0.0})
-        buy_base = t["buy"]
-        sell_base = t["sell"]
-        if buy_base > 0:
-            buy_pct = abs((buy_base - curr) / buy_base * 100)
-            rows.append([stock, "买入", buy_base, curr, buy_pct])
-        if sell_base > 0:
-            sell_pct = abs((curr - sell_base) / sell_base * 100)
-            rows.append([stock, "卖出", sell_base, curr, sell_pct])
+        t = targets_dict.get(stock, {})
+        base = t.get("base_price", 0.0)
+        p_high = t.get("prior_high", 0.0)
+        p_low = t.get("prior_low", 0.0)
+        b_low = t.get("break_low", 0.0)
+        b_high = t.get("break_high", 0.0)
+        trend = t.get("trend", "")
+        if p_high <= p_low or p_low == 0 or p_high == 0:
+            continue
+        if b_low > 0:
+            rebound_rate = (p_high - p_low) / p_low * 0.382
+            buy_price = b_low * (1 + rebound_rate)
+            buy_pct = abs((curr - buy_price) / buy_price) * 100 if buy_price > 0 else 0.0
+            rows.append([stock, "买入", buy_price, curr, buy_pct, trend, rebound_rate * 100, "反弹比例"])
+        if b_high > 0:
+            fallback_rate = (p_high - p_low) / p_high * 0.618
+            sell_price = b_high * (1 - fallback_rate)
+            sell_pct = abs((curr - sell_price) / sell_price) * 100 if sell_price > 0 else 0.0
+            rows.append([stock, "卖出", sell_price, curr, sell_pct, trend, fallback_rate * 100, "回落比例"])
 
     if rows:
         rows.sort(key=lambda x: x[4])  # 按距离升序
         cols = st.columns(2)           # 一排两张卡片
         for idx, r in enumerate(rows):
-            stock, direction, base, curr, pct = r
+            stock, direction, target, curr, pct, trend, prop, prop_type = r
             color = "#4CAF50" if direction == "买入" else "#F44336"
             with cols[idx % 2]:
                 st.markdown(f"""
                 <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
-                            padding:8px 10px;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08);">
+                            padding:8px 10px;margin-bottom:4px;box-shadow:0 0 10px rgba(0,0,0,0.05);">
                     <div style="display:flex;align-items:center;gap:6px;">
                         <span style="font-size:1.05em;font-weight:600;">{stock}</span>
                         <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
                     </div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">基准 {base:.3f}　现价 {curr:.3f}</div>
+                    <div style="font-size:0.8em;color:#666;margin-top:2px;">趋势: {trend}</div>
+                    <div style="font-size:0.8em;color:#666;margin-top:2px;">目标 {target:.3f}　现价 {curr:.3f}</div>
+                    <div style="font-size:0.8em;color:#666;margin-top:2px;">{prop_type}: {prop:.2f}%</div>
                     <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
                         还差 {pct:.2f}%
                     </div>
@@ -537,9 +556,6 @@ elif choice == "🎯 价格目标管理":
                 """, unsafe_allow_html=True)
     else:
         st.info("暂无基准价记录")
-
-
-
 
 
 
@@ -810,10 +826,6 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-
-
-
-
 
 
 
