@@ -131,9 +131,14 @@ c.execute('''
 c.execute('''
     CREATE TABLE IF NOT EXISTS price_targets (
         code TEXT PRIMARY KEY,
-        base_price REAL DEFAULT 0.0,
-        buy_target REAL DEFAULT 0.0,
-        sell_target REAL DEFAULT 0.0,
+        buy_base REAL DEFAULT 0.0,
+        buy_rebound_pct REAL DEFAULT 0.0,
+        buy_low_point REAL DEFAULT 0.0,
+        buy_status TEXT DEFAULT '未设置',
+        sell_base REAL DEFAULT 0.0,
+        sell_pullback_pct REAL DEFAULT 0.0,
+        sell_high_point REAL DEFAULT 0.0,
+        sell_status TEXT DEFAULT '未设置',
         last_updated TEXT
     )
 ''')
@@ -146,6 +151,19 @@ try:
     c.execute("ALTER TABLE trades ADD COLUMN note TEXT")
 except sqlite3.OperationalError:
     pass
+# 为 price_targets 添加新列（如果缺失）
+for col, col_type in [
+    ("buy_rebound_pct", "REAL DEFAULT 0.0"),
+    ("buy_low_point", "REAL DEFAULT 0.0"),
+    ("buy_status", "TEXT DEFAULT '未设置'"),
+    ("sell_pullback_pct", "REAL DEFAULT 0.0"),
+    ("sell_high_point", "REAL DEFAULT 0.0"),
+    ("sell_status", "TEXT DEFAULT '未设置'")
+]:
+    try:
+        c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} {col_type}")
+    except sqlite3.OperationalError:
+        pass
 conn.commit()
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
@@ -450,21 +468,15 @@ elif choice == "💰 盈利账单":
 # --- 价格目标管理 ---
 elif choice == "🎯 价格目标管理":
     # 1) 读取数据
-    try:
-        targets_raw = c.execute("SELECT code, buy_base, sell_base FROM price_targets").fetchall()
-    except sqlite3.OperationalError:
-        targets_raw = c.execute("SELECT code, base_price, 0.0 FROM price_targets").fetchall()
-    targets_dict = {r[0]: {"buy": r[1] or 0.0, "sell": r[2] or 0.0} for r in targets_raw}
-
-    def ensure_columns():
-        for col in ["buy_base", "sell_base"]:
-            try:
-                c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} REAL DEFAULT 0.0")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-        thread = threading.Thread(target=sync_db_to_github, daemon=True)
-        thread.start()
+    targets_raw = c.execute("""
+        SELECT code, buy_base, buy_rebound_pct, buy_low_point, buy_status,
+               sell_base, sell_pullback_pct, sell_high_point, sell_status
+        FROM price_targets
+    """).fetchall()
+    targets_dict = {r[0]: {
+        "buy_base": r[1] or 0.0, "buy_rebound_pct": r[2] or 0.0, "buy_low_point": r[3] or 0.0, "buy_status": r[4] or "未设置",
+        "sell_base": r[5] or 0.0, "sell_pullback_pct": r[6] or 0.0, "sell_high_point": r[7] or 0.0, "sell_status": r[8] or "未设置"
+    } for r in targets_raw}
 
     current_prices = {row[0]: row[1] or 0.0
                       for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
@@ -474,24 +486,37 @@ elif choice == "🎯 价格目标管理":
     c1, c2 = st.columns([4, 1])
     c1.markdown("## 🎯 价格目标管理")
     c2.markdown("<br>", unsafe_allow_html=True)
-    with c2.expander("➕ 新增", expanded=False):
+    with c2.expander("➕ 新增/编辑", expanded=False):
         selected_stock = st.selectbox("股票", [""] + all_stocks, key="target_stock_select")
         if selected_stock:
             curr = current_prices.get(selected_stock, 0.0)
             st.caption(f"现价 **{curr:.3f}**" if curr > 0 else "暂无现价")
-            exist = targets_dict.get(selected_stock, {"buy": 0.0, "sell": 0.0})
-            buy_val = float(exist["buy"]) if exist["buy"] else 0.0
-            sell_val = float(exist["sell"]) if exist["sell"] else 0.0
-            buy_base = st.number_input("买入基准", value=buy_val, step=0.001, format="%.3f")
-            sell_base = st.number_input("卖出基准", value=sell_val, step=0.001, format="%.3f")
+            exist = targets_dict.get(selected_stock, {
+                "buy_base": 0.0, "buy_rebound_pct": 0.0, "buy_low_point": 0.0, "buy_status": "未设置",
+                "sell_base": 0.0, "sell_pullback_pct": 0.0, "sell_high_point": 0.0, "sell_status": "未设置"
+            })
+            
+            st.subheader("买入设置")
+            buy_base = st.number_input("买入基准价", value=exist["buy_base"], step=0.001, format="%.3f")
+            buy_rebound_pct = st.number_input("反弹百分比 (%)", value=exist["buy_rebound_pct"], step=0.01)
+            buy_low_point = st.number_input("最低价 (手动更新)", value=exist["buy_low_point"], step=0.001, format="%.3f")
+            buy_status = st.selectbox("买入状态", ["未设置", "正在跌破", "跌破后反弹中"], index=["未设置", "正在跌破", "跌破后反弹中"].index(exist["buy_status"]))
+            
+            st.subheader("卖出设置")
+            sell_base = st.number_input("卖出基准价", value=exist["sell_base"], step=0.001, format="%.3f")
+            sell_pullback_pct = st.number_input("回调百分比 (%)", value=exist["sell_pullback_pct"], step=0.01)
+            sell_high_point = st.number_input("最高价 (手动更新)", value=exist["sell_high_point"], step=0.001, format="%.3f")
+            sell_status = st.selectbox("卖出状态", ["未设置", "正在突破", "突破后回调中"], index=["未设置", "正在突破", "突破后回调中"].index(exist["sell_status"]))
+            
             if st.button("保存", type="primary"):
-                ensure_columns()
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 c.execute("""
                     INSERT OR REPLACE INTO price_targets
-                    (code, buy_base, sell_base, last_updated)
-                    VALUES (?,?,?,?)
-                """, (selected_stock, buy_base, sell_base, now_str))
+                    (code, buy_base, buy_rebound_pct, buy_low_point, buy_status,
+                     sell_base, sell_pullback_pct, sell_high_point, sell_status, last_updated)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (selected_stock, buy_base, buy_rebound_pct, buy_low_point, buy_status,
+                      sell_base, sell_pullback_pct, sell_high_point, sell_status, now_str))
                 conn.commit()
                 thread = threading.Thread(target=sync_db_to_github, daemon=True)
                 thread.start()
@@ -505,47 +530,59 @@ elif choice == "🎯 价格目标管理":
         curr = current_prices.get(stock, 0.0)
         if curr <= 0:
             continue
-        t = targets_dict.get(stock, {"buy": 0.0, "sell": 0.0})
-        buy_base = t["buy"]
-        sell_base = t["sell"]
-        if buy_base > 0:
-            buy_pct = abs((buy_base - curr) / buy_base * 100)
-            rows.append([stock, "买入", buy_base, curr, buy_pct])
-        if sell_base > 0:
-            sell_pct = abs((curr - sell_base) / sell_base * 100)
-            rows.append([stock, "卖出", sell_base, curr, sell_pct])
+        t = targets_dict.get(stock, {
+            "buy_base": 0.0, "buy_rebound_pct": 0.0, "buy_low_point": 0.0, "buy_status": "未设置",
+            "sell_base": 0.0, "sell_pullback_pct": 0.0, "sell_high_point": 0.0, "sell_status": "未设置"
+        })
+        
+        # 计算买入目标价和距离
+        if t["buy_status"] != "未设置" and t["buy_base"] > 0:
+            if t["buy_status"] == "跌破后反弹中" and t["buy_low_point"] > 0:
+                buy_target = t["buy_low_point"] * (1 + t["buy_rebound_pct"] / 100)
+                buy_pct = abs((curr - buy_target) / buy_target * 100) if buy_target > 0 else 0
+                buy_diff = (curr - buy_target) / buy_target * 100 if buy_target > 0 else 0
+                buy_label = f"还差 {buy_pct:.2f}%" if curr < buy_target else f"已超 {abs(buy_diff):.2f}%"
+                rows.append([stock, "买入", t["buy_base"], curr, buy_target, buy_pct, buy_label, t["buy_status"], t["buy_low_point"]])
+            else:
+                rows.append([stock, "买入", t["buy_base"], curr, 0.0, 9999, "等待最低价" if t["buy_status"] == "正在跌破" else "未激活", t["buy_status"], t["buy_low_point"]])
+        
+        # 计算卖出目标价和距离
+        if t["sell_status"] != "未设置" and t["sell_base"] > 0:
+            if t["sell_status"] == "突破后回调中" and t["sell_high_point"] > 0:
+                sell_target = t["sell_high_point"] * (1 - t["sell_pullback_pct"] / 100)
+                sell_pct = abs((sell_target - curr) / sell_target * 100) if sell_target > 0 else 0
+                sell_diff = (sell_target - curr) / sell_target * 100 if sell_target > 0 else 0
+                sell_label = f"还差 {sell_pct:.2f}%" if curr > sell_target else f"已超 {abs(sell_diff):.2f}%"
+                rows.append([stock, "卖出", t["sell_base"], curr, sell_target, sell_pct, sell_label, t["sell_status"], t["sell_high_point"]])
+            else:
+                rows.append([stock, "卖出", t["sell_base"], curr, 0.0, 9999, "等待最高价" if t["sell_status"] == "正在突破" else "未激活", t["sell_status"], t["sell_high_point"]])
 
     if rows:
-        rows.sort(key=lambda x: x[4])  # 按距离升序
+        rows.sort(key=lambda x: x[5])  # 按距离升序
         cols = st.columns(2)           # 一排两张卡片
         for idx, r in enumerate(rows):
-            stock, direction, base, curr, pct = r
+            stock, direction, base, curr, target, pct, label, status, point = r
             color = "#4CAF50" if direction == "买入" else "#F44336"
+            point_label = "最低价" if direction == "买入" else "最高价"
+            point_val = point if point > 0 else "未设置"
+            target_val = target if target > 0 else "未计算"
             with cols[idx % 2]:
                 st.markdown(f"""
                 <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
-                            padding:8px 10px;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08);">
+                            padding:8px 10px;margin-bottom:4px;box-shadow:0 0 10px rgba(0,0,0,0.05);">
                     <div style="display:flex;align-items:center;gap:6px;">
                         <span style="font-size:1.05em;font-weight:600;">{stock}</span>
                         <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
                     </div>
                     <div style="font-size:0.8em;color:#666;margin-top:2px;">基准 {base:.3f}　现价 {curr:.3f}</div>
+                    <div style="font-size:0.8em;color:#666;">{point_label} {point_val:.3f}　状态 {status}</div>
                     <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
-                        还差 {pct:.2f}%
+                        目标 {target_val:.3f}　{label}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
     else:
         st.info("暂无基准价记录")
-
-
-
-
-
-
-
-
-
 
 # --- 交易录入 ---
 elif choice == "📝 交易录入":
@@ -810,13 +847,3 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-
-
-
-
-
-
-
-
-
-
