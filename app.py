@@ -447,96 +447,121 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-# --- 价格目标管理 ---
-elif choice == "🎯 价格目标管理":
-    # 1) 读取数据
-    try:
-        targets_raw = c.execute("SELECT code, buy_base, sell_base FROM price_targets").fetchall()
-    except sqlite3.OperationalError:
-        targets_raw = c.execute("SELECT code, base_price, 0.0 FROM price_targets").fetchall()
-    targets_dict = {r[0]: {"buy": r[1] or 0.0, "sell": r[2] or 0.0} for r in targets_raw}
-
-    def ensure_columns():
-        for col in ["buy_base", "sell_base"]:
-            try:
-                c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} REAL DEFAULT 0.0")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-        thread = threading.Thread(target=sync_db_to_github, daemon=True)
-        thread.start()
-
-    current_prices = {row[0]: row[1] or 0.0
-                      for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+def price_target_management():
+    """价格目标管理模块（替换原有部分）"""
+    st.subheader("🎯 价格目标管理")
+    
+    # 获取股票列表
     all_stocks = get_dynamic_stock_list()
+    
+    # 创建两个选项卡
+    tab1, tab2 = st.tabs(["买入监控", "卖出监控"])
+    
+    with tab1:
+        st.markdown("### 买入价格设置")
+        selected_stock = st.selectbox("选择股票", all_stocks, key="buy_stock_select")
+        
+        # 获取当前价格
+        current_price = get_current_price(selected_stock) if selected_stock else 0
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            base_price = st.number_input("基准价", value=current_price, step=0.01, key="buy_base")
+            rebound_percent = st.number_input("反弹百分比(%)", value=5.0, step=0.1, key="buy_rebound")
+        with col2:
+            trend_direction = st.radio(
+                "价格走势",
+                ["正在跌破", "跌破后反弹"],
+                key="buy_trend",
+                help="选择当前价格走势状态"
+            )
+            if trend_direction == "跌破后反弹":
+                lowest_price = st.number_input(
+                    "最低价（手动更新）",
+                    value=base_price * 0.9,
+                    step=0.01,
+                    key="buy_lowest"
+                )
+        
+        # 计算建议买入价
+        if trend_direction == "跌破后反弹":
+            buy_price = lowest_price * (1 + rebound_percent/100)
+        else:
+            buy_price = base_price * (1 - rebound_percent/100)
+        
+        st.metric("建议买入价", f"{buy_price:.2f}")
+        
+        if st.button("保存买入设置", key="save_buy"):
+            save_price_target(
+                stock=selected_stock,
+                base_price=base_price,
+                rebound_percent=rebound_percent,
+                trend_direction=trend_direction,
+                lowest_price=lowest_price if trend_direction == "跌破后反弹" else None,
+                target_type="buy"
+            )
+            st.success("买入设置已保存")
+    
+    with tab2:
+        st.markdown("### 卖出价格设置")
+        selected_stock = st.selectbox("选择股票", all_stocks, key="sell_stock_select")
+        
+        # 获取当前价格
+        current_price = get_current_price(selected_stock) if selected_stock else 0
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            base_price = st.number_input("基准价", value=current_price, step=0.01, key="sell_base")
+            rebound_percent = st.number_input("反弹百分比(%)", value=5.0, step=0.1, key="sell_rebound")
+        with col2:
+            trend_direction = st.radio(
+                "价格走势",
+                ["正在上涨", "上涨后回落"],
+                key="sell_trend",
+                help="选择当前价格走势状态"
+            )
+            if trend_direction == "上涨后回落":
+                highest_price = st.number_input(
+                    "最高价（手动更新）",
+                    value=base_price * 1.1,
+                    step=0.01,
+                    key="sell_highest"
+                )
+        
+        # 计算建议卖出价
+        if trend_direction == "上涨后回落":
+            sell_price = highest_price * (1 - rebound_percent/100)
+        else:
+            sell_price = base_price * (1 + rebound_percent/100)
+        
+        st.metric("建议卖出价", f"{sell_price:.2f}")
+        
+        if st.button("保存卖出设置", key="save_sell"):
+            save_price_target(
+                stock=selected_stock,
+                base_price=base_price,
+                rebound_percent=rebound_percent,
+                trend_direction=trend_direction,
+                highest_price=highest_price if trend_direction == "上涨后回落" else None,
+                target_type="sell"
+            )
+            st.success("卖出设置已保存")
 
-    # ---- 2. 顶部一行：标题 + 新增按钮 ----
-    c1, c2 = st.columns([4, 1])
-    c1.markdown("## 🎯 价格目标管理")
-    c2.markdown("<br>", unsafe_allow_html=True)
-    with c2.expander("➕ 新增", expanded=False):
-        selected_stock = st.selectbox("股票", [""] + all_stocks, key="target_stock_select")
-        if selected_stock:
-            curr = current_prices.get(selected_stock, 0.0)
-            st.caption(f"现价 **{curr:.3f}**" if curr > 0 else "暂无现价")
-            exist = targets_dict.get(selected_stock, {"buy": 0.0, "sell": 0.0})
-            buy_val = float(exist["buy"]) if exist["buy"] else 0.0
-            sell_val = float(exist["sell"]) if exist["sell"] else 0.0
-            buy_base = st.number_input("买入基准", value=buy_val, step=0.001, format="%.3f")
-            sell_base = st.number_input("卖出基准", value=sell_val, step=0.001, format="%.3f")
-            if st.button("保存", type="primary"):
-                ensure_columns()
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                c.execute("""
-                    INSERT OR REPLACE INTO price_targets
-                    (code, buy_base, sell_base, last_updated)
-                    VALUES (?,?,?,?)
-                """, (selected_stock, buy_base, sell_base, now_str))
-                conn.commit()
-                thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                thread.start()
-                st.success("已保存")
+def save_price_target(stock, base_price, rebound_percent, trend_direction, 
+                     lowest_price=None, highest_price=None, target_type="buy"):
+    """保存价格目标到数据库"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # 这里需要根据您的数据库结构进行调整
+    c.execute("""
+        INSERT OR REPLACE INTO price_targets 
+        (code, base_price, rebound_percent, trend_direction, 
+         lowest_price, highest_price, target_type, last_updated)
+        VALUES (?,?,?,?,?,?,?,?)
+    """, (stock, base_price, rebound_percent, trend_direction,
+          lowest_price, highest_price, target_type, now))
+    conn.commit()
 
-    # ---- 3. 栅格卡片（一排两张，紧凑） ----
-    st.subheader("当前监控")
-
-    rows = []
-    for stock in all_stocks:
-        curr = current_prices.get(stock, 0.0)
-        if curr <= 0:
-            continue
-        t = targets_dict.get(stock, {"buy": 0.0, "sell": 0.0})
-        buy_base = t["buy"]
-        sell_base = t["sell"]
-        if buy_base > 0:
-            buy_pct = abs((buy_base - curr) / buy_base * 100)
-            rows.append([stock, "买入", buy_base, curr, buy_pct])
-        if sell_base > 0:
-            sell_pct = abs((curr - sell_base) / sell_base * 100)
-            rows.append([stock, "卖出", sell_base, curr, sell_pct])
-
-    if rows:
-        rows.sort(key=lambda x: x[4])  # 按距离升序
-        cols = st.columns(2)           # 一排两张卡片
-        for idx, r in enumerate(rows):
-            stock, direction, base, curr, pct = r
-            color = "#4CAF50" if direction == "买入" else "#F44336"
-            with cols[idx % 2]:
-                st.markdown(f"""
-                <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
-                            padding:8px 10px;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08);">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="font-size:1.05em;font-weight:600;">{stock}</span>
-                        <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
-                    </div>
-                    <div style="font-size:0.8em;color:#666;margin-top:2px;">基准 {base:.3f}　现价 {curr:.3f}</div>
-                    <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
-                        还差 {pct:.2f}%
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("暂无基准价记录")
 
 
 
@@ -810,6 +835,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
