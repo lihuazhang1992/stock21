@@ -447,229 +447,97 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-elif menu == "🎯 价格目标管理":
-    st.title("🎯 价格目标管理")
-    st.caption("基于前期高点下跌 / 前期低点上涨的独立目标价体系")
+# --- 价格目标管理 ---
+elif choice == "🎯 价格目标管理":
+    # 1) 读取数据
+    try:
+        targets_raw = c.execute("SELECT code, buy_base, sell_base FROM price_targets").fetchall()
+    except sqlite3.OperationalError:
+        targets_raw = c.execute("SELECT code, base_price, 0.0 FROM price_targets").fetchall()
+    targets_dict = {r[0]: {"buy": r[1] or 0.0, "sell": r[2] or 0.0} for r in targets_raw}
 
-    # === 数据库升级：新增字段（安全，仅新增，不影响旧数据）===
-    with sqlite3.connect(DB_PATH) as conn:
-        c = conn.cursor()
-        # 添加新字段（如果不存在）
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN buy_high REAL")
-        except sqlite3.OperationalError:
-            pass  # 字段已存在
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN buy_drop_pct REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN buy_broken BOOLEAN DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN buy_low_after_break REAL")
-        except sqlite3.OperationalError:
-            pass
-
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN sell_low REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN sell_rise_pct REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN sell_broken BOOLEAN DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE price_targets ADD COLUMN sell_high_after_break REAL")
-        except sqlite3.OperationalError:
-            pass
-
+    def ensure_columns():
+        for col in ["buy_base", "sell_base"]:
+            try:
+                c.execute(f"ALTER TABLE price_targets ADD COLUMN {col} REAL DEFAULT 0.0")
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
+        thread = threading.Thread(target=sync_db_to_github, daemon=True)
+        thread.start()
 
-    # === 获取所有股票代码 ===
-    with sqlite3.connect(DB_PATH) as conn:
-        stocks_df = pd.read_sql("SELECT code, name FROM stocks ORDER BY code", conn)
-        all_codes = stocks_df.set_index('code')['name'].to_dict()
+    current_prices = {row[0]: row[1] or 0.0
+                      for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    all_stocks = get_dynamic_stock_list()
 
-    selected_code = st.selectbox("选择股票", options=list(all_codes.keys()), format_func=lambda x: f"{x} {all_codes[x]}")
+    # ---- 2. 顶部一行：标题 + 新增按钮 ----
+    c1, c2 = st.columns([4, 1])
+    c1.markdown("## 🎯 价格目标管理")
+    c2.markdown("<br>", unsafe_allow_html=True)
+    with c2.expander("➕ 新增", expanded=False):
+        selected_stock = st.selectbox("股票", [""] + all_stocks, key="target_stock_select")
+        if selected_stock:
+            curr = current_prices.get(selected_stock, 0.0)
+            st.caption(f"现价 **{curr:.3f}**" if curr > 0 else "暂无现价")
+            exist = targets_dict.get(selected_stock, {"buy": 0.0, "sell": 0.0})
+            buy_val = float(exist["buy"]) if exist["buy"] else 0.0
+            sell_val = float(exist["sell"]) if exist["sell"] else 0.0
+            buy_base = st.number_input("买入基准", value=buy_val, step=0.001, format="%.3f")
+            sell_base = st.number_input("卖出基准", value=sell_val, step=0.001, format="%.3f")
+            if st.button("保存", type="primary"):
+                ensure_columns()
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                c.execute("""
+                    INSERT OR REPLACE INTO price_targets
+                    (code, buy_base, sell_base, last_updated)
+                    VALUES (?,?,?,?)
+                """, (selected_stock, buy_base, sell_base, now_str))
+                conn.commit()
+                thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                thread.start()
+                st.success("已保存")
 
-    if not selected_code:
-        st.stop()
+    # ---- 3. 栅格卡片（一排两张，紧凑） ----
+    st.subheader("当前监控")
 
-    current_price = None
-    with sqlite3.connect(DB_PATH) as conn:
-        price_row = conn.execute("SELECT close FROM daily_prices WHERE code = ? ORDER BY date DESC LIMIT 1", (selected_code,)).fetchone()
-        if price_row:
-            current_price = price_row[0]
+    rows = []
+    for stock in all_stocks:
+        curr = current_prices.get(stock, 0.0)
+        if curr <= 0:
+            continue
+        t = targets_dict.get(stock, {"buy": 0.0, "sell": 0.0})
+        buy_base = t["buy"]
+        sell_base = t["sell"]
+        if buy_base > 0:
+            buy_pct = abs((buy_base - curr) / buy_base * 100)
+            rows.append([stock, "买入", buy_base, curr, buy_pct])
+        if sell_base > 0:
+            sell_pct = abs((curr - sell_base) / sell_base * 100)
+            rows.append([stock, "卖出", sell_base, curr, sell_pct])
 
-    # === 读取当前配置 ===
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("""
-            SELECT buy_high, buy_drop_pct, buy_broken, buy_low_after_break,
-                   sell_low, sell_rise_pct, sell_broken, sell_high_after_break
-            FROM price_targets WHERE code = ?
-        """, (selected_code,)).fetchone()
+    if rows:
+        rows.sort(key=lambda x: x[4])  # 按距离升序
+        cols = st.columns(2)           # 一排两张卡片
+        for idx, r in enumerate(rows):
+            stock, direction, base, curr, pct = r
+            color = "#4CAF50" if direction == "买入" else "#F44336"
+            with cols[idx % 2]:
+                st.markdown(f"""
+                <div style="background:#fff;border-left:4px solid {color};border-radius:6px;
+                            padding:8px 10px;margin-bottom:4px;box-shadow:0 1px 2px rgba(0,0,0,.08);">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="font-size:1.05em;font-weight:600;">{stock}</span>
+                        <span style="background:{color};color:#fff;border-radius:4px;padding:1px 5px;font-size:0.8em;">{direction}</span>
+                    </div>
+                    <div style="font-size:0.8em;color:#666;margin-top:2px;">基准 {base:.3f}　现价 {curr:.3f}</div>
+                    <div style="margin-top:4px;font-size:1.15em;font-weight:500;color:{color};">
+                        还差 {pct:.2f}%
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("暂无基准价记录")
 
-        if row:
-            (buy_high, buy_drop_pct, buy_broken, buy_low_after_break,
-             sell_low, sell_rise_pct, sell_broken, sell_high_after_break) = row
-        else:
-            buy_high = buy_drop_pct = buy_broken = buy_low_after_break = None
-            sell_low = sell_rise_pct = sell_broken = sell_high_after_break = None
-
-    # === 配置区：上下分块 ===
-    st.subheader("🔧 买入体系配置（前期高点下跌）")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        new_buy_high = st.number_input("前期高点价位", value=float(buy_high) if buy_high else 0.0, format="%.3f", key="buy_high")
-    with col2:
-        new_buy_drop_pct = st.number_input("下跌幅度 (%)", value=float(buy_drop_pct) if buy_drop_pct else 0.0, min_value=0.0, max_value=100.0, key="buy_drop")
-    with col3:
-        new_buy_broken = st.radio("突破基准价", ["未突破", "已突破"], index=1 if buy_broken else 0, horizontal=True, key="buy_broken_radio")
-
-    buy_broken_bool = (new_buy_broken == "已突破")
-    buy_low_input = None
-    if buy_broken_bool:
-        buy_low_input = st.number_input("突破后最低价", value=float(buy_low_after_break) if buy_low_after_break else 0.0, format="%.3f", key="buy_low_after")
-
-    st.subheader("🔧 卖出体系配置（前期低点上涨）")
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        new_sell_low = st.number_input("前期低点价位", value=float(sell_low) if sell_low else 0.0, format="%.3f", key="sell_low")
-    with col5:
-        new_sell_rise_pct = st.number_input("上涨幅度 (%)", value=float(sell_rise_pct) if sell_rise_pct else 0.0, min_value=0.0, max_value=100.0, key="sell_rise")
-    with col6:
-        new_sell_broken = st.radio("突破基准价", ["未突破", "已突破"], index=1 if sell_broken else 0, horizontal=True, key="sell_broken_radio")
-
-    sell_broken_bool = (new_sell_broken == "已突破")
-    sell_high_input = None
-    if sell_broken_bool:
-        sell_high_input = st.number_input("突破后最高价", value=float(sell_high_after_break) if sell_high_after_break else 0.0, format="%.3f", key="sell_high_after")
-
-    # === 保存配置 ===
-    if st.button("💾 保存配置"):
-        with sqlite3.connect(DB_PATH) as conn:
-            # 插入或更新
-            conn.execute("""
-                INSERT OR REPLACE INTO price_targets 
-                (code, buy_high, buy_drop_pct, buy_broken, buy_low_after_break,
-                 sell_low, sell_rise_pct, sell_broken, sell_high_after_break, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """, (
-                selected_code,
-                new_buy_high or None,
-                new_buy_drop_pct or None,
-                int(buy_broken_bool),
-                buy_low_input or None,
-                new_sell_low or None,
-                new_sell_rise_pct or None,
-                int(sell_broken_bool),
-                sell_high_input or None
-            ))
-            conn.commit()
-        st.success("配置已保存！")
-        time.sleep(0.5)
-        st.rerun()
-
-    # === 计算函数 ===
-    def safe_div(a, b, default=0.0):
-        return a / b if b and b != 0 else default
-
-    def calc_buy_target(high, drop_pct, broken, low_after, cur_price):
-        if not high or not drop_pct:
-            return None
-        base = high * (1 - drop_pct / 100)
-        res = {"base": round(base, 3), "broken": broken}
-        if broken and low_after:
-            drop_abs = high - low_after
-            buy_price = low_after + drop_abs * 0.382
-            rebound_pct = safe_div(buy_price - low_after, low_after) * 100
-            to_target_pct = safe_div(buy_price - cur_price, cur_price) * 100 if cur_price else 0
-            res.update({
-                "low_after": round(low_after, 3),
-                "buy_price": round(buy_price, 3),
-                "rebound_pct": round(rebound_pct, 2),
-                "to_target_pct": round(to_target_pct, 2)
-            })
-        else:
-            gap_pct = safe_div(base - cur_price, cur_price) * 100 if cur_price else 0
-            res["gap_to_base"] = round(gap_pct, 2)
-        return res
-
-    def calc_sell_target(low, rise_pct, broken, high_after, cur_price):
-        if not low or not rise_pct:
-            return None
-        base = low * (1 + rise_pct / 100)
-        res = {"base": round(base, 3), "broken": broken}
-        if broken and high_after:
-            rise_abs = high_after - low
-            sell_price = high_after - rise_abs * 0.618
-            fall_pct = safe_div(high_after - sell_price, high_after) * 100
-            to_target_pct = safe_div(cur_price - sell_price, sell_price) * 100 if sell_price else 0
-            res.update({
-                "high_after": round(high_after, 3),
-                "sell_price": round(sell_price, 3),
-                "fall_pct": round(fall_pct, 2),
-                "to_target_pct": round(to_target_pct, 2)
-            })
-        else:
-            gap_pct = safe_div(base - cur_price, cur_price) * 100 if cur_price else 0
-            res["gap_to_base"] = round(gap_pct, 2)
-        return res
-
-    # === 显示监控结果 ===
-    st.divider()
-    st.subheader("📊 目标监控")
-
-    # 买入体系显示
-    buy_data = calc_buy_target(new_buy_high, new_buy_drop_pct, buy_broken_bool, buy_low_input, current_price)
-    if buy_data:
-        with st.container(border=True):
-            st.markdown("🟢 **买入体系（反弹中）**")
-            cols = st.columns(3)
-            cols[0].write(f"前期高点：{new_buy_high:.3f}")
-            cols[1].write(f"下跌幅度：{new_buy_drop_pct:.1f}%")
-            cols[2].write(f"基准价：{buy_data['base']:.3f}")
-
-            if buy_data["broken"]:
-                st.write(f"突破后最低价：{buy_data['low_after']:.3f}")
-                st.write(f"**买入价：{buy_data['buy_price']:.3f}**")
-                st.write(f"低价→买入价反弹：{buy_data['rebound_pct']:.2f}%")
-                if current_price:
-                    st.write(f"当前价距离买入价还差：{buy_data['to_target_pct']:.2f}%")
-                st.caption("✅ 已突破基准价 | 趋势：反弹中")
-            else:
-                if current_price:
-                    st.write(f"距离基准价还差：{buy_data['gap_to_base']:.2f}% 突破")
-
-    # 卖出体系显示
-    sell_data = calc_sell_target(new_sell_low, new_sell_rise_pct, sell_broken_bool, sell_high_input, current_price)
-    if sell_data:
-        with st.container(border=True):
-            st.markdown("🔴 **卖出体系（回调中）**")
-            cols = st.columns(3)
-            cols[0].write(f"前期低点：{new_sell_low:.3f}")
-            cols[1].write(f"上涨幅度：{new_sell_rise_pct:.1f}%")
-            cols[2].write(f"基准价：{sell_data['base']:.3f}")
-
-            if sell_data["broken"]:
-                st.write(f"突破后最高价：{sell_data['high_after']:.3f}")
-                st.write(f"**卖出价：{sell_data['sell_price']:.3f}**")
-                st.write(f"高价→卖出价回落：{sell_data['fall_pct']:.2f}%")
-                if sell_data['sell_price']:
-                    st.write(f"当前价距离卖出价还差：{sell_data['to_target_pct']:.2f}%")
-                st.caption("✅ 已突破基准价 | 趋势：回调中")
-            else:
-                if current_price:
-                    st.write(f"距离基准价还差：{sell_data['gap_to_base']:.2f}% 突破")
-
-    if not buy_data and not sell_data:
-        st.info("请先配置买入或卖出体系参数。")
 
 
 
@@ -942,8 +810,6 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-
-
 
 
 
