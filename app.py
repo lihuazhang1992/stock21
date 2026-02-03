@@ -728,6 +728,7 @@ elif choice == "🎯 价格目标管理":
         st.info("暂无价格目标数据，请先添加配置。")
 
 
+
 # --- 交易录入 ---
 elif choice == "📝 交易录入":
     st.header("📝 交易录入")
@@ -989,4 +990,5 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
