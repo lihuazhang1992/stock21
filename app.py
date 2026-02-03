@@ -447,27 +447,6 @@ elif choice == "💰 盈利账单":
             html += f"<tr><td>{r['股票名称']}</td><td>{r['累计投入']:,.2f}</td><td>{r['累计回收']:,.2f}</td><td>{r['持仓市值']:,.2f}</td><td class='{c_class}'>{r['总盈亏']:,.2f}</td></tr>"
         st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
 
-import sqlite3
-import datetime
-import threading
-import streamlit as st
-
-# 假设这些函数/变量在你的代码中已定义，这里补充必要的占位以保证代码完整性
-def get_dynamic_stock_list():
-    """获取股票列表（请根据你的实际逻辑修改）"""
-    # 这里是示例，你需要替换为真实的股票列表获取逻辑
-    c.execute("SELECT DISTINCT code FROM prices")
-    return [row[0] for row in c.fetchall()]
-
-def sync_db_to_github():
-    """同步数据库到GitHub（请根据你的实际逻辑修改）"""
-    # 这里是占位，替换为你的同步逻辑
-    pass
-
-# 初始化数据库连接（请确保你的conn/c变量已正确初始化）
-conn = sqlite3.connect('stock_data.db', check_same_thread=False)
-c = conn.cursor()
-
 # --- 价格目标管理 ---
 choice = "🎯 价格目标管理"  # 仅用于测试，实际使用时请删除这行
 
@@ -1010,6 +989,7 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
+
 
 
 
