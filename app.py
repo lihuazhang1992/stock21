@@ -696,243 +696,325 @@ elif choice == "🎯 价格目标管理":
     if all_configs:
         detail_data = []
         for row in all_configs:
-            code = row[0]
-            curr_price = get_current_price(code)
-            
-            # 买入体系参数
-            buy_high_point = row[1] or 0.0
-            buy_drop_pct = row[2] or 0.0
-            buy_break_status = row[3] or "未突破"
-            buy_low_after_break = row[4] or 0.0
-            buy_calc = calc_buy_target({
-                'buy_high_point': buy_high_point,
-                'buy_drop_pct': buy_drop_pct,
-                'buy_break_status': buy_break_status,
-                'buy_low_after_break': buy_low_after_break
-            }, curr_price)
-            
-            # 卖出体系参数
-            sell_low_point = row[5] or 0.0
-            sell_rise_pct = row[6] or 0.0
-            sell_break_status = row[7] or "未突破"
-            sell_high_after_break = row[8] or 0.0
-            sell_calc = calc_sell_target({
-                'sell_low_point': sell_low_point,
-                'sell_rise_pct': sell_rise_pct,
-                'sell_break_status': sell_break_status,
-                'sell_high_after_break': sell_high_after_break
-            }, curr_price)
-            
-            # 组装详情数据（包含反弹值/回落值）
-            detail_data.append({
-                "股票代码": code,
-                "当前价格": f"{curr_price:.3f}" if curr_price > 0 else "未设置",
-                # 买入体系
-                "买入-前期高点": f"{buy_high_point:.3f}",
-                "买入-下跌幅度(%)": f"{buy_drop_pct:.2f}",
-                "买入-突破状态": buy_break_status,
-                "买入-突破后低点": f"{buy_low_after_break:.3f}" if buy_low_after_break > 0 else "未设置",
-                "买入-周期跌幅": f"{buy_calc['cycle_drop']:.3f}" if buy_calc['cycle_drop'] else "0.000",
-                "买入-反弹目标价": f"{buy_calc['buy_target']:.3f}" if buy_calc['buy_target'] else "0.000",
-                "买入-反弹比例(%)": f"{buy_calc['rebound_pct']:.2f}" if buy_calc['rebound_pct'] else "0.00",
-                # 卖出体系
-                "卖出-前期低点": f"{sell_low_point:.3f}",
-                "卖出-上涨幅度(%)": f"{sell_rise_pct:.2f}",
-                "卖出-突破状态": sell_break_status,
-                "卖出-突破后高点": f"{sell_high_after_break:.3f}" if sell_high_after_break > 0 else "未设置",
-                "卖出-周期涨幅": f"{sell_calc['cycle_rise']:.3f}" if sell_calc['cycle_rise'] else "0.000",
-                "卖出-回落目标价": f"{sell_calc['sell_target']:.3f}" if sell_calc['sell_target'] else "0.000",
-                "卖出-回落比例(%)": f"{sell_calc['fallback_pct']:.2f}" if sell_calc['fallback_pct'] else "0.00",
-                "最后更新时间": row[9] if len(row) > 9 else "未记录"
-            })
-        
-        # 转换为DataFrame并显示
-        df_detail = pd.DataFrame(detail_data)
-        # 调整列的显示顺序
-        show_columns = [
-            "股票代码", "当前价格",
-            "买入-前期高点", "买入-下跌幅度(%)", "买入-突破状态", "买入-突破后低点",
-            "买入-周期跌幅", "买入-反弹目标价", "买入-反弹比例(%)",
-            "卖出-前期低点", "卖出-上涨幅度(%)", "卖出-突破状态", "卖出-突破后高点",
-            "卖出-周期涨幅", "卖出-回落目标价", "卖出-回落比例(%)",
-            "最后更新时间"
-        ]
-        st.dataframe(df_detail[show_columns], use_container_width=True)
+            code, b_high, b_drop, b_break, b_low, s_low, s_rise, s_break, s_high, _ = row
+            curr_p = get_current_price(code)
+
+            # 买入体系详情
+            if b_high and b_drop:
+                buy_base = round(b_high * (1 - b_drop / 100), 3)
+                if b_break == '已突破' and b_low:
+                    cycle_drop = round(b_high - b_low, 3)
+                    buy_target = round(b_low + cycle_drop * 0.382, 3)
+                    to_target = round((buy_target - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+                else:
+                    buy_target = '-'
+                    to_target = round((buy_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+
+                detail_data.append({
+                    '股票': code, '体系': '买入', '突破状态': b_break,
+                    '前期高点': b_high, '下跌幅度': f"{b_drop:.2f}%", '基准价': buy_base,
+                    '突破后极值': b_low if b_low else '-', '目标价': buy_target,
+                    '当前价': curr_p if curr_p > 0 else '-',
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                })
+
+            # 卖出体系详情
+            if s_low and s_rise:
+                sell_base = round(s_low * (1 + s_rise / 100), 3)
+                if s_break == '已突破' and s_high:
+                    cycle_rise = round(s_high - s_low, 3)
+                    sell_target = round(s_high - cycle_rise * 0.618, 3)
+                    to_target = round((curr_p - sell_target) / sell_target * 100, 2) if curr_p > 0 else None
+                else:
+                    sell_target = '-'
+                    to_target = round((sell_base - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
+
+                detail_data.append({
+                    '股票': code, '体系': '卖出', '突破状态': s_break,
+                    '前期低点': s_low, '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
+                    '突破后极值': s_high if s_high else '-', '目标价': sell_target,
+                    '当前价': curr_p if curr_p > 0 else '-',
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                })
+
+        if detail_data:
+            df_detail = pd.DataFrame(detail_data)
+            st.dataframe(df_detail, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无有效配置数据")
     else:
-        st.info("📌 暂无价格目标配置数据，请先配置监控参数")
+        st.info("暂无价格目标配置")
 
 # --- 交易录入 ---
 elif choice == "📝 交易录入":
-    # 此处保留原代码逻辑（因用户未提供完整交易录入模块，保持原有结构）
     st.header("📝 交易录入")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        trade_date = st.date_input("交易日期", datetime.now())
-        stock_code = st.selectbox("股票代码", get_dynamic_stock_list())
-    with col2:
-        action = st.selectbox("操作类型", ["买入", "卖出"])
-        price = st.number_input("成交价格", min_value=0.0001, step=0.0001, format="%.4f")
-    with col3:
-        quantity = st.number_input("成交数量", min_value=1, step=1)
-        note = st.text_input("交易备注（选填）")
-    
-    if st.button("✅ 提交交易记录", type="primary"):
-        try:
-            c.execute("INSERT INTO trades (date, code, action, price, quantity, note) VALUES (?, ?, ?, ?, ?, ?)",
-                      (trade_date.strftime('%Y-%m-%d'), stock_code, action, price, quantity, note))
-            conn.commit()
-            thread = threading.Thread(target=sync_db_to_github, daemon=True)
-            thread.start()
-            st.success("✅ 交易记录录入成功！")
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ 录入失败: {e}")
+    full_list = get_dynamic_stock_list()
+    t_code = st.selectbox("选择股票", options=["【添加新股票】"] + full_list, index=None)
+    final_code = st.text_input("新股票名（必填）") if t_code == "【添加新股票】" else t_code
+    with st.form("trade_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        d = c1.date_input("日期", datetime.now())
+        a = c2.selectbox("操作", ["买入", "卖出"])
+       
+        p = c1.number_input("单价", value=None, min_value=0.0, step=0.001, format="%.3f")
+        q = c2.number_input("数量", value=None, min_value=1, step=1)
+       
+        note = st.text_input("备注（可选）", placeholder="例如：突破20日均线买入、分红除权、止盈卖出等")
+        submitted = st.form_submit_button("保存交易")
+        if submitted:
+            if not final_code:
+                st.error("请填写或选择股票代码")
+            elif p is None or q is None:
+                st.error("请填写单价和数量")
+            else:
+                c.execute("""
+                    INSERT INTO trades (date, code, action, price, quantity, note)
+                    VALUES (?,?,?,?,?,?)
+                """, (d.strftime('%Y-%m-%d'), final_code, a, p, q, note if note.strip() else None))
+                conn.commit()
+                thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                thread.start()
+                st.success("交易记录已保存！")
+                st.rerun()
 
 # --- 买卖信号 ---
 elif choice == "🔔 买卖信号":
-    st.header("🔔 买卖信号管理")
-    # 读取现有信号配置
-    signal_data = c.execute("SELECT * FROM signals").fetchall()
-    signal_dict = {row[0]: {
-        'high_point': row[1], 'low_point': row[2],
-        'up_threshold': row[3], 'down_threshold': row[4],
-        'high_date': row[5], 'low_date': row[6]
-    } for row in signal_data}
+    st.header("🔔 策略监控信号")
     
-    selected_stock = st.selectbox("选择股票", get_dynamic_stock_list())
-    current_signal = signal_dict.get(selected_stock, {})
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        high_point = st.number_input("高点价格", value=current_signal.get('high_point', 0.0), step=0.001, format="%.3f")
-        high_date = st.date_input("高点日期", value=datetime.strptime(current_signal.get('high_date', '2024-01-01'), '%Y-%m-%d') if current_signal.get('high_date') else datetime.now())
-        up_threshold = st.number_input("上涨阈值(%)", value=current_signal.get('up_threshold', 0.0), step=0.1, format="%.1f")
-    with col2:
-        low_point = st.number_input("低点价格", value=current_signal.get('low_point', 0.0), step=0.001, format="%.3f")
-        low_date = st.date_input("低点日期", value=datetime.strptime(current_signal.get('low_date', '2024-01-01'), '%Y-%m-%d') if current_signal.get('low_date') else datetime.now())
-        down_threshold = st.number_input("下跌阈值(%)", value=current_signal.get('down_threshold', 0.0), step=0.1, format="%.1f")
-    
-    if st.button("💾 保存信号配置", type="primary"):
-        c.execute("INSERT OR REPLACE INTO signals (code, high_point, low_point, up_threshold, down_threshold, high_date, low_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (selected_stock, high_point, low_point, up_threshold, down_threshold,
-                   high_date.strftime('%Y-%m-%d'), low_date.strftime('%Y-%m-%d')))
-        conn.commit()
-        thread = threading.Thread(target=sync_db_to_github, daemon=True)
-        thread.start()
-        st.success("✅ 信号配置保存成功！")
-    
-    # 信号提醒
-    st.subheader("📢 实时信号提醒")
-    current_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
-    for stock in get_dynamic_stock_list():
-        if stock not in signal_dict or stock not in current_prices:
-            continue
-        sig = signal_dict[stock]
-        curr_p = current_prices[stock]
-        if curr_p <= 0:
-            continue
-        
-        # 计算涨幅/跌幅
-        if sig['high_point'] > 0:
-            down_pct = ((sig['high_point'] - curr_p) / sig['high_point']) * 100
-            if down_pct >= sig['down_threshold']:
-                st.warning(f"⚠️ {stock} 下跌超过阈值: 当前{curr_p:.3f}, 高点{sig['high_point']:.3f}, 跌幅{down_pct:.1f}% (阈值{sig['down_threshold']:.1f}%)")
-        
-        if sig['low_point'] > 0:
-            up_pct = ((curr_p - sig['low_point']) / sig['low_point']) * 100
-            if up_pct >= sig['up_threshold']:
-                st.success(f"📈 {stock} 上涨超过阈值: 当前{curr_p:.3f}, 低点{sig['low_point']:.3f}, 涨幅{up_pct:.1f}% (阈值{sig['up_threshold']:.1f}%)")
-
-# --- 历史明细 ---
-elif choice == "📜 历史明细":
-    st.header("📜 交易历史明细")
-    df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date DESC, id DESC", conn)
-    if not df_trades.empty:
-        # 筛选功能
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            stock_filter = st.text_input("筛选股票代码")
-        with col2:
-            action_filter = st.selectbox("筛选操作类型", ["全部", "买入", "卖出"])
-        with col3:
-            date_filter = st.date_input("筛选日期", value=None)
-        
-        # 应用筛选
-        filtered_df = df_trades.copy()
-        if stock_filter:
-            filtered_df = filtered_df[filtered_df['code'].str.contains(stock_filter, case=False)]
-        if action_filter != "全部":
-            filtered_df = filtered_df[filtered_df['action'] == action_filter]
-        if date_filter:
-            filtered_df = filtered_df[filtered_df['date'] == date_filter.strftime('%Y-%m-%d')]
-        
-        # 显示表格
-        st.dataframe(filtered_df, use_container_width=True)
-        
-        # 删除功能
-        if not filtered_df.empty:
-            selected_id = st.selectbox("选择要删除的记录ID", filtered_df['id'].tolist())
-            if st.button("🗑️ 删除选中记录", type="secondary"):
-                c.execute("DELETE FROM trades WHERE id = ?", (selected_id,))
+    # 新增：动态格式化数字函数（去除末尾无意义的0）
+    def format_number(num):
+        """动态格式化数字，保留有效小数位，去除末尾无意义的0"""
+        if pd.isna(num) or num is None or num == 0:
+            return "0"
+        formatted = f"{num}".rstrip('0').rstrip('.') if '.' in f"{num}" else f"{num}"
+        return formatted
+  
+    with st.expander("➕ 设置新监控"):
+        existing_signals = pd.read_sql("SELECT code FROM signals", conn)['code'].tolist()
+        s_code = st.selectbox("监控股票", options=get_dynamic_stock_list(), index=None)
+      
+        signal_data = None
+        if s_code and s_code in existing_signals:
+            signal_data = c.execute("""
+                SELECT high_point, low_point, up_threshold, down_threshold, high_date, low_date
+                FROM signals WHERE code = ?
+            """, (s_code,)).fetchone()
+      
+        c1, c2 = st.columns(2)
+        # 修改1：调小输入步长到0.0001，支持更多小数位输入（无format限制）
+        s_high = c1.number_input("高点参考价", value=float(signal_data[0]) if signal_data else None, step=0.0001)
+        h_date = c1.date_input("高点日期", value=datetime.strptime(signal_data[4], '%Y-%m-%d').date() if signal_data and signal_data[4] else datetime.now())
+      
+        s_low = c2.number_input("低点参考价", value=float(signal_data[1]) if signal_data else None, step=0.0001)
+        l_date = c2.date_input("低点日期", value=datetime.strptime(signal_data[5], '%Y-%m-%d').date() if signal_data and signal_data[5] else datetime.now())
+      
+        # 百分比输入框也支持更多小数位（可选，保持原有逻辑也可以）
+        s_up = c1.number_input("上涨触发 (%)", value=float(signal_data[2]) if signal_data else 20.0, step=0.01)
+        s_down = c2.number_input("回调触发 (%)", value=float(signal_data[3]) if signal_data else 20.0, step=0.01)
+      
+        if st.button("🚀 启动/更新监控"):
+            if all([s_code, s_high, s_low, s_up, s_down]):
+                c.execute("""
+                    INSERT OR REPLACE INTO signals
+                    (code, high_point, low_point, up_threshold, down_threshold, high_date, low_date)
+                    VALUES (?,?,?,?,?,?,?)
+                """, (s_code, s_high, s_low, s_up, s_down,
+                      h_date.strftime('%Y-%m-%d'), l_date.strftime('%Y-%m-%d')))
                 conn.commit()
                 thread = threading.Thread(target=sync_db_to_github, daemon=True)
                 thread.start()
-                st.success("✅ 记录已删除！")
+                st.success("监控已更新")
                 st.rerun()
-    else:
-        st.info("📌 暂无交易历史记录")
-
-# --- 复盘日记 ---
-elif choice == "📓 复盘日记":
-    st.header("📓 交易复盘日记")
-    
-    # 读取日记数据
-    df_journal = pd.read_sql("SELECT * FROM journal ORDER BY date DESC, id DESC", conn)
-    
-    # 新增日记
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        journal_date = st.date_input("日记日期", datetime.now())
-        stock_name = st.selectbox("关联股票", get_dynamic_stock_list())
-    with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)  # 对齐
-        if st.button("➕ 新增日记", type="primary"):
-            c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?, ?, ?)",
-                      (journal_date.strftime('%Y-%m-%d'), stock_name, ""))
+   
+    sig_df = pd.read_sql("SELECT * FROM signals", conn)
+    prices_map = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+  
+    if not sig_df.empty:
+        html = '<table class="custom-table"><thead><tr><th>代码</th><th>高点(日期)</th><th>低点(日期)</th><th>距高点</th><th>距低点</th><th>建议</th></tr></thead><tbody>'
+        for _, r in sig_df.iterrows():
+            np = prices_map.get(r['code'], 0.0)
+            dr = ((np - r['high_point']) / r['high_point'] * 100) if r['high_point'] > 0 else 0
+            rr = ((np - r['low_point']) / r['low_point'] * 100) if r['low_point'] > 0 else 0
+            st_text = "🟢 建议卖出" if rr >= r['up_threshold'] else "🔴 建议买入" if dr <= -r['down_threshold'] else "⚖️ 观望"
+            
+            # 修改2：移除:.2f，改用动态格式化函数处理高点/低点参考价
+            high_point_formatted = format_number(r['high_point'])
+            low_point_formatted = format_number(r['low_point'])
+            
+            html += f"<tr><td>{r['code']}</td><td>{high_point_formatted}<br><small>{r['high_date']}</small></td><td>{low_point_formatted}<br><small>{r['low_date']}</small></td><td>{dr:.2f}%</td><td>{rr:.2f}%</td><td>{st_text}</td></tr>"
+        st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
+      
+        if st.button("🗑️ 清空所有监控"):
+            c.execute("DELETE FROM signals")
             conn.commit()
             thread = threading.Thread(target=sync_db_to_github, daemon=True)
             thread.start()
             st.rerun()
-    
-    # 编辑/查看日记
-    if not df_journal.empty:
-        selected_id = st.selectbox("选择日记ID", df_journal['id'].tolist())
-        selected_journal = df_journal[df_journal['id'] == selected_id].iloc[0]
-        
-        content = st.text_area("日记内容", value=selected_journal['content'], height=300)
-        col_save, col_delete = st.columns(2)
-        with col_save:
-            if st.button("💾 保存日记", type="primary"):
-                c.execute("UPDATE journal SET date=?, stock_name=?, content=? WHERE id=?",
-                          (selected_journal['date'], selected_journal['stock_name'], content, selected_id))
-                conn.commit()
-                thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                thread.start()
-                st.success("✅ 日记已保存！")
-        with col_delete:
-            if st.button("🗑️ 删除日记", type="secondary"):
-                c.execute("DELETE FROM journal WHERE id=?", (selected_id,))
-                conn.commit()
-                thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                thread.start()
-                st.success("✅ 日记已删除！")
-                st.rerun()
-        
-        # 显示日记列表
-        st.subheader("日记列表")
-        st.dataframe(df_journal[['id', 'date', 'stock_name']], use_container_width=True)
     else:
-        st.info("📌 暂无复盘日记，请点击新增按钮创建")
+        st.info("当前没有设置任何监控信号")
 
-# 关闭数据库连接（程序结束时）
-conn.close()
+# --- 历史明细 ---
+elif choice == "📜 历史明细":
+    st.header("📜 历史交易流水")
+   
+    # 读取完整数据，并将 date 列转换为 datetime.date 类型
+    df_full = pd.read_sql("SELECT id, date, code, action, price, quantity, note FROM trades ORDER BY date DESC, id DESC", conn)
+   
+    if df_full.empty:
+        st.info("暂无交易记录")
+    else:
+        # 关键修复：将字符串日期转换为 date 对象
+        df_full['date'] = pd.to_datetime(df_full['date']).dt.date
+       
+        # 显示部分：支持搜索筛选（仅影响显示）
+        search_code = st.text_input("🔍 搜索股票代码（仅影响显示，不影响编辑）")
+        df_display = df_full.copy()
+        if search_code:
+            df_display = df_display[df_display['code'].str.contains(search_code, case=False, na=False)]
+       
+        # 美化显示筛选结果
+        html = '<table class="custom-table"><thead><tr><th>日期</th><th>代码</th><th>操作</th><th>价格</th><th>数量</th><th>总额</th><th>备注</th></tr></thead><tbody>'
+        for _, r in df_display.iterrows():
+            tag = f'<span class="profit-red">{r["action"]}</span>' if r["action"] == "买入" else f'<span class="loss-green">{r["action"]}</span>'
+            note_display = r['note'] if pd.notna(r['note']) and str(r['note']).strip() else '<small style="color:#888;">无备注</small>'
+            html += f"<tr><td>{r['date']}</td><td>{r['code']}</td><td>{tag}</td><td>{r['price']:.3f}</td><td>{int(r['quantity'])}</td><td>{r['price']*r['quantity']:,.2f}</td><td>{note_display}</td></tr>"
+        st.markdown(html + '</tbody></table>', unsafe_allow_html=True)
+       
+        st.warning("⚠️ 注意：下方编辑器操作的是**全部交易记录**（不受上方搜索影响），支持增删改，请谨慎操作！")
+       
+        # 编辑部分：使用转换后的 df_full（date 为 date 类型）
+        with st.expander("🛠️ 数据库维护（编辑全部交易记录，支持增、删、改）", expanded=False):
+            edited_df = st.data_editor(
+                df_full,
+                use_container_width=True,
+                num_rows="dynamic",
+                hide_index=False,
+                column_config={
+                    "id": st.column_config.NumberColumn("ID", disabled=True),
+                    "date": st.column_config.DateColumn("日期", format="YYYY-MM-DD", required=True),
+                    "code": st.column_config.TextColumn("代码", required=True),
+                    "action": st.column_config.SelectboxColumn("操作", options=["买入", "卖出"], required=True),
+                    "price": st.column_config.NumberColumn("价格", min_value=0.0, format="%.3f", required=True),
+                    "quantity": st.column_config.NumberColumn("数量", min_value=1, step=1, required=True),
+                    "note": st.column_config.TextColumn("备注", width="large"),
+                },
+                key="trades_editor"
+            )
+           
+            col_save, col_cancel = st.columns([1, 4])
+            with col_save:
+                if st.button("💾 提交所有修改", type="primary"):
+                    try:
+                        # 保存前：将 date 列转回字符串格式，适配数据库 TEXT 类型
+                        save_df = edited_df.copy()
+                        save_df['date'] = pd.to_datetime(save_df['date']).dt.strftime('%Y-%m-%d')
+                       
+                        # 替换整个表（现在是完整数据，安全）
+                        save_df.to_sql('trades', conn, if_exists='replace', index=False)
+                        conn.commit()
+                        thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                        thread.start()
+                        st.success("所有交易记录已成功更新！")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"保存失败：{e}")
+
+# --- 复盘日记 ---
+elif choice == "📓 复盘日记":
+    st.header("📓 复盘日记")
+
+    # 1) 建表
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            stock_name TEXT,
+            content TEXT
+        )
+    """)
+    conn.commit()
+    thread = threading.Thread(target=sync_db_to_github, daemon=True)
+    thread.start()
+
+    # 2) 写新日记
+    with st.expander("✍️ 写新日记", expanded=True):
+        stock_options = ["大盘"] + get_dynamic_stock_list()
+        ds = st.selectbox("复盘对象", options=stock_options, index=None, key="new_journal_stock")
+        content = st.text_area("心得内容", height=150, key="new_journal_content", placeholder="支持换行、列表、空格等格式")
+        if st.button("保存日记", type="primary"):
+            if ds and content.strip():
+                c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
+                          (datetime.now().strftime('%Y-%m-%d'), ds, content.strip()))
+                conn.commit()
+                thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                thread.start()
+                st.success("已存档")
+                st.rerun()
+            else:
+                st.warning("请选择复盘对象并填写内容")
+
+    # 3) 展示（带删除按钮）
+    st.subheader("历史复盘记录")
+    journal_df = pd.read_sql("SELECT id, date, stock_name, content FROM journal ORDER BY date DESC, id DESC", conn)
+
+    if journal_df.empty:
+        st.info("暂无复盘记录")
+    else:
+        unique_stocks = ["全部"] + sorted(journal_df['stock_name'].unique().tolist())
+        filter_stock = st.selectbox("筛选股票/大盘", options=unique_stocks, index=0)
+        display_df = journal_df if filter_stock == "全部" else journal_df[journal_df['stock_name'] == filter_stock]
+
+        if display_df.empty:
+            st.info(f"没有与「{filter_stock}」相关的复盘记录")
+        else:
+            for _, row in display_df.iterrows():
+                # 删除按钮：二次确认
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(f"""
+                    <div style="background:#f7f7f7;border-left:4px solid #2196F3;border-radius:4px;padding:8px 10px;margin-bottom:4px;">
+                        <div style="font-size:0.85em;color:#555;">{row['date']} · {row['stock_name']}</div>
+                        <div style="white-space: pre-line;font-size:0.95em;margin-top:4px;">
+                            {row['content']}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    if st.button("🗑️", key=f"del_{row['id']}"):
+                        if st.session_state.get(f"confirm_{row['id']}", False):
+                            c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
+                            conn.commit()
+                            thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                            thread.start()
+                            st.success("已删除")
+                            st.rerun()
+                        else:
+                            st.session_state[f"confirm_{row['id']}"] = True
+                            st.warning("再点一次确认删除")
+
+            st.caption(f"共 {len(journal_df)} 条记录，当前显示 {len(display_df)} 条")
+
+
+
+# --- 下载数据库按钮 ---
+col1, col2, col3 = st.columns([5, 1, 1])
+with col3:
+    db_path = pathlib.Path(__file__).with_name("stock_data_v12.db")
+    if db_path.exists():
+        with open(db_path, "rb") as f:
+            st.download_button(
+                label="📥 下载数据库",
+                data=f,
+                file_name="stock_data_v12.db",
+                mime="application/x-sqlite3"
+            )
+
+
+
+
+
+
+
+
+
+
