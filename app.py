@@ -702,9 +702,11 @@ elif choice == "🎯 价格目标管理":
             # 买入体系详情
             if b_high and b_drop:
                 buy_base = round(b_high * (1 - b_drop / 100), 3)
+                rebound_pct = '-'
                 if b_break == '已突破' and b_low:
                     cycle_drop = round(b_high - b_low, 3)
                     buy_target = round(b_low + cycle_drop * 0.382, 3)
+                    rebound_pct = round((buy_target - b_low) / b_low * 100, 2) if b_low > 0 else '-'
                     to_target = round((buy_target - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
                 else:
                     buy_target = '-'
@@ -715,15 +717,19 @@ elif choice == "🎯 价格目标管理":
                     '前期高点': b_high, '下跌幅度': f"{b_drop:.2f}%", '基准价': buy_base,
                     '突破后极值': b_low if b_low else '-', '目标价': buy_target,
                     '当前价': curr_p if curr_p > 0 else '-',
-                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
+                    '反弹值': f"{rebound_pct:.2f}%" if rebound_pct != '-' else '-',
+                    '回落值': '-'
                 })
 
             # 卖出体系详情
             if s_low and s_rise:
                 sell_base = round(s_low * (1 + s_rise / 100), 3)
+                fallback_pct = '-'
                 if s_break == '已突破' and s_high:
                     cycle_rise = round(s_high - s_low, 3)
                     sell_target = round(s_high - cycle_rise * 0.618, 3)
+                    fallback_pct = round((s_high - sell_target) / s_high * 100, 2) if s_high > 0 else '-'
                     to_target = round((curr_p - sell_target) / sell_target * 100, 2) if curr_p > 0 else None
                 else:
                     sell_target = '-'
@@ -734,12 +740,21 @@ elif choice == "🎯 价格目标管理":
                     '前期低点': s_low, '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
                     '突破后极值': s_high if s_high else '-', '目标价': sell_target,
                     '当前价': curr_p if curr_p > 0 else '-',
-                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-'
+                    '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
+                    '反弹值': '-',
+                    '回落值': f"{fallback_pct:.2f}%" if fallback_pct != '-' else '-'
                 })
 
         if detail_data:
-            df_detail = pd.DataFrame(detail_data)
-            st.dataframe(df_detail, use_container_width=True, hide_index=True)
+            # 美化成HTML表格
+            html = '<table class="custom-table"><thead><tr><th>股票</th><th>体系</th><th>突破状态</th><th>前期极值</th><th>幅度(%)</th><th>基准价</th><th>突破后极值</th><th>目标价</th><th>当前价</th><th>距离目标(%)</th><th>反弹值(%)</th><th>回落值(%)</th></tr></thead><tbody>'
+            for item in detail_data:
+                # 根据体系调整列显示（前期极值和幅度根据体系不同）
+                pre_extreme = item['前期高点'] if item['体系'] == '买入' else item['前期低点']
+                amplitude = item['下跌幅度'] if item['体系'] == '买入' else item['上涨幅度']
+                html += f"<tr><td>{item['股票']}</td><td>{item['体系']}</td><td>{item['突破状态']}</td><td>{pre_extreme}</td><td>{amplitude}</td><td>{item['基准价']}</td><td>{item['突破后极值']}</td><td>{item['目标价']}</td><td>{item['当前价']}</td><td>{item['距离目标']}</td><td>{item['反弹值']}</td><td>{item['回落值']}</td></tr>"
+            html += '</tbody></table>'
+            st.markdown(html, unsafe_allow_html=True)
         else:
             st.info("暂无有效配置数据")
     else:
@@ -1008,13 +1023,3 @@ with col3:
                 file_name="stock_data_v12.db",
                 mime="application/x-sqlite3"
             )
-
-
-
-
-
-
-
-
-
-
