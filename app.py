@@ -723,7 +723,7 @@ elif choice == "🎯 价格目标管理":
                 'sell_high_after_break': sell_high_after
             }, curr_price)
             
-            # 组装详情数据（新增反弹值、回落值）
+            # 组装详情数据 - 包含反弹值和回落值
             detail_data.append({
                 "股票代码": code,
                 "当前价格": f"{curr_price:.3f}" if curr_price > 0 else "未设置",
@@ -732,14 +732,14 @@ elif choice == "🎯 价格目标管理":
                 "买入-下跌幅度(%)": f"{buy_drop:.2f}" if buy_drop > 0 else "-",
                 "买入-突破状态": buy_break,
                 "买入-突破后低点": f"{buy_low_after:.3f}" if buy_low_after > 0 else "-",
-                "买入-反弹值(%)": f"{buy_calc['rebound_pct']:.2f}" if buy_calc['rebound_pct'] else "-",
+                "买入-反弹值(%)": f"{buy_calc['rebound_pct']:.2f}" if buy_calc['rebound_pct'] is not None else "-",
                 "买入-目标价": f"{buy_calc['buy_target']:.3f}" if buy_calc['buy_target'] else (f"{buy_calc['base_price']:.3f}" if buy_calc['base_price'] else "-"),
                 # 卖出体系
                 "卖出-前期低点": f"{sell_low:.3f}" if sell_low > 0 else "-",
                 "卖出-上涨幅度(%)": f"{sell_rise:.2f}" if sell_rise > 0 else "-",
                 "卖出-突破状态": sell_break,
                 "卖出-突破后高点": f"{sell_high_after:.3f}" if sell_high_after > 0 else "-",
-                "卖出-回落值(%)": f"{sell_calc['fallback_pct']:.2f}" if sell_calc['fallback_pct'] else "-",
+                "卖出-回落值(%)": f"{sell_calc['fallback_pct']:.2f}" if sell_calc['fallback_pct'] is not None else "-",
                 "卖出-目标价": f"{sell_calc['sell_target']:.3f}" if sell_calc['sell_target'] else (f"{sell_calc['base_price']:.3f}" if sell_calc['base_price'] else "-"),
                 "最后更新时间": row[9] or "-"
             })
