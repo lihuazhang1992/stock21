@@ -303,27 +303,13 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        # --- 安全读取策略数据 (防止 OperationalError 和 NameError) ---
-        strategy_df = pd.read_sql("SELECT * FROM strategy_notes WHERE code = ?", conn, params=(selected_stock,))
-        if not strategy_df.empty:
-            s_row = strategy_df.iloc[0]
-            saved_logic = s_row.get('logic', "")
-            saved_annual = s_row.get('annual_return', 0.0)
-            s_buy_base = s_row.get('buy_base_price', 0.0)
-            s_buy_drop = s_row.get('buy_drop_pct', 0.0)
-            s_sell_base = s_row.get('sell_base_price', 0.0)
-            s_sell_rise = s_row.get('sell_rise_pct', 0.0)
-            saved_buy_logic = s_row.get('buy_logic', "")
-            saved_sell_logic = s_row.get('sell_logic', "")
-        else:
-            saved_logic = ""
-            saved_annual = 0.0
-            s_buy_base = 0.0
-            s_buy_drop = 0.0
-            s_sell_base = 0.0
-            s_sell_rise = 0.0
-            saved_buy_logic = ""
-            saved_sell_logic = "" 
+        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
+        saved_logic = strategy_data[0] if strategy_data else ""
+        saved_annual = strategy_data[1] if strategy_data else 0.0
+        s_buy_base = strategy_data[2] if strategy_data else 0.0
+        s_buy_drop = strategy_data[3] if strategy_data else 0.0
+        s_sell_base = strategy_data[4] if strategy_data else 0.0
+        s_sell_rise = strategy_data[5] if strategy_data else 0.0
 
         # --- 第一区：核心指标卡片 ---
         st.subheader(f"📊 {selected_stock} 核心数据概览")
@@ -376,23 +362,13 @@ if choice == "📈 策略复盘":
         # 平均涨跌幅 (强制显示)
         r3c3.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
         r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
-        # --- 左右并排逻辑展示 ---
-        if saved_buy_logic or saved_sell_logic:
-            lc1, lc2 = st.columns(2)
-            if saved_buy_logic:
-                lc1.markdown(f"""
-                <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-                    <h4 style="margin-top:0; color:#00C49F; font-size:1.1em; font-weight:bold; margin-bottom:10px;">🟢 买入原则</h4>
-                    <div style="white-space: pre-wrap; font-size: 1.0em; color:#FFFFFF; font-weight: 500; line-height: 1.5;">{saved_buy_logic}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            if saved_sell_logic:
-                lc2.markdown(f"""
-                <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #FF4B4B; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-                    <h4 style="margin-top:0; color:#FF4B4B; font-size:1.1em; font-weight:bold; margin-bottom:10px;">🔴 卖出原则</h4>
-                    <div style="white-space: pre-wrap; font-size: 1.0em; color:#FFFFFF; font-weight: 500; line-height: 1.5;">{saved_sell_logic}</div>
-                </div>
-                """, unsafe_allow_html=True)
+        if saved_logic:
+            st.markdown(f"""
+            <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
+                <h4 style="margin-top:0; color:#009879; font-size:1.1em;">🧠 当前交易逻辑</h4>
+                <p style="white-space: pre-wrap; font-size: 0.9em; color:#ddd;">{saved_logic}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.divider()
 
@@ -402,10 +378,7 @@ if choice == "📈 策略复盘":
         with col_left:
             st.subheader("🧠 交易逻辑与参数设置")
             with st.form("strategy_form"):
-                st.write("**📝 交易逻辑 (买卖原则)**")
-                fc1, fc2 = st.columns(2)
-                new_buy_logic = fc1.text_area("🟢 买入原则", value=saved_buy_logic, height=150)
-                new_sell_logic = fc2.text_area("🔴 卖出原则", value=saved_sell_logic, height=150)
+                new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
                 new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
                 
                 st.write("---")
@@ -420,30 +393,17 @@ if choice == "📈 策略复盘":
                 new_sell_rise = col_s2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
                 
                 if st.form_submit_button("💾 保存所有设置"):
-                    # 保存前最后一秒：再次强制检查字段是否存在
-                    ensure_columns_exist(conn)
-                    try:
-                        c.execute("""
-                            INSERT OR REPLACE INTO strategy_notes 
-                            (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic) 
-                            VALUES (?,?,?,?,?,?,?,?,?,?)
-                        """, (selected_stock, saved_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise, new_buy_logic, new_sell_logic))
-                        conn.commit()
-                        st.success("✅ 配置已成功保存")
-                        st.rerun()
-                    except sqlite3.OperationalError:
-                        # 极端防御：如果全量插入失败，尝试最小化插入（仅保存核心字段）
-                        try:
-                            c.execute("""
-                                INSERT OR REPLACE INTO strategy_notes (code, logic, max_holding_amount, annual_return) 
-                                VALUES (?,?,?,?)
-                            """, (selected_stock, saved_logic, max_occupied_amount, new_annual))
-                            conn.commit()
-                            st.warning("⚠️ 部分新字段保存失败（数据库升级中），已优先保存核心数据。请刷新页面重试。")
-                        except Exception as e:
-                            st.error(f"❌ 严重错误：无法保存配置 - {e}")
+                    c.execute("""
+                        INSERT OR REPLACE INTO strategy_notes 
+                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
+                        VALUES (?,?,?,?,?,?,?,?)
+                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
+                    conn.commit()
+                    st.success("已保存")
+                    st.rerun()
             
-
+            if saved_logic:
+                st.info(f"**当前逻辑存档：**\n\n{saved_logic}")
 
         with col_right:
             st.subheader("📜 决策历史记录")
