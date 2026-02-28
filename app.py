@@ -328,13 +328,7 @@ if choice == "📈 策略复盘":
         
         c4.metric("历史年化收益", f"{saved_annual:.2f}%")
         
-        # 获取涨跌周期平均值
-        cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
-        if not cycles_data.empty:
-            up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean()
-            down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean()
-            c1.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
-            c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
+
         
         
         # 在核心区展示当前逻辑
