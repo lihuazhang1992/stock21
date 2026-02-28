@@ -364,9 +364,9 @@ if choice == "📈 策略复盘":
         r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         if saved_logic:
             st.markdown(f"""
-            <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
-                <h4 style="margin-top:0; color:#009879; font-size:1.1em;">🧠 当前交易逻辑</h4>
-                <p style="white-space: pre-wrap; font-size: 0.9em; color:#ddd;">{saved_logic}</p>
+            <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                <h4 style="margin-top:0; color:#00C49F; font-size:1.2em; font-weight:bold; margin-bottom:10px;">🧠 当前交易逻辑</h4>
+                <div style="white-space: pre-wrap; font-size: 1.1em; color:#FFFFFF; font-weight: 500; line-height: 1.6;">{saved_logic}</div>
             </div>
             """, unsafe_allow_html=True)
 
