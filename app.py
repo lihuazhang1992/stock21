@@ -179,6 +179,15 @@ try:
 except sqlite3.OperationalError:
     pass
 conn.commit()
+
+try:
+    c.execute("ALTER TABLE strategy_notes ADD COLUMN buy_base_price REAL DEFAULT 0.0")
+    c.execute("ALTER TABLE strategy_notes ADD COLUMN buy_drop_pct REAL DEFAULT 0.0")
+    c.execute("ALTER TABLE strategy_notes ADD COLUMN sell_base_price REAL DEFAULT 0.0")
+    c.execute("ALTER TABLE strategy_notes ADD COLUMN sell_rise_pct REAL DEFAULT 0.0")
+except:
+    pass
+
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
 
@@ -294,9 +303,13 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        strategy_data = c.execute("SELECT logic, annual_return FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
+        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
         saved_logic = strategy_data[0] if strategy_data else ""
         saved_annual = strategy_data[1] if strategy_data else 0.0
+        s_buy_base = strategy_data[2] if strategy_data else 0.0
+        s_buy_drop = strategy_data[3] if strategy_data else 0.0
+        s_sell_base = strategy_data[4] if strategy_data else 0.0
+        s_sell_rise = strategy_data[5] if strategy_data else 0.0
 
         # --- 第一区：核心指标卡片 ---
         st.subheader(f"📊 {selected_stock} 核心数据概览")
@@ -323,6 +336,57 @@ if choice == "📈 策略复盘":
             c1.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
             c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         
+        
+        # --- 监控价逻辑计算与展示 ---
+        st.markdown("---")
+        m_col1, m_col2 = st.columns(2)
+        
+        # 买入监控
+        if s_buy_base > 0:
+            buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100)
+            if now_p > s_buy_base:
+                b_status = "🟢 已反弹 (现价 > 基准价)"
+                b_color = "#4CAF50"
+            elif now_p <= buy_monitor_p:
+                b_status = "🔴 已达标 (现价 ≤ 监控价)"
+                b_color = "#F44336"
+            else:
+                b_status = "🟡 观察中 (未达监控价)"
+                b_color = "#FFC107"
+            
+            m_col1.markdown(f"""
+            <div style="background: {b_color}22; border: 1px solid {b_color}; border-radius: 8px; padding: 12px;">
+                <div style="font-size: 0.8em; color: {b_color}; font-weight: bold;">📥 买入监控状态</div>
+                <div style="font-size: 1.1em; margin: 4px 0;">{b_status}</div>
+                <div style="font-size: 0.85em; color: #888;">基准: {s_buy_base:.3f} | 监控价: <b>{buy_monitor_p:.3f}</b> (-{s_buy_drop}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            m_col1.info("未设置买入监控")
+
+        # 卖出监控
+        if s_sell_base > 0:
+            sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100)
+            if now_p < s_sell_base:
+                s_status = "🟢 已回落 (现价 < 基准价)"
+                s_color = "#4CAF50"
+            elif now_p >= sell_monitor_p:
+                s_status = "🔴 已达标 (现价 ≥ 监控价)"
+                s_color = "#F44336"
+            else:
+                s_status = "🟡 观察中 (未达监控价)"
+                s_color = "#FFC107"
+            
+            m_col2.markdown(f"""
+            <div style="background: {s_color}22; border: 1px solid {s_color}; border-radius: 8px; padding: 12px;">
+                <div style="font-size: 0.8em; color: {s_color}; font-weight: bold;">📤 卖出监控状态</div>
+                <div style="font-size: 1.1em; margin: 4px 0;">{s_status}</div>
+                <div style="font-size: 0.85em; color: #888;">基准: {s_sell_base:.3f} | 监控价: <b>{sell_monitor_p:.3f}</b> (+{s_sell_rise}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            m_col2.info("未设置卖出监控")
+
         # 在核心区展示当前逻辑
         if saved_logic:
             st.markdown(f"""
@@ -342,9 +406,24 @@ if choice == "📈 策略复盘":
             with st.form("strategy_form"):
                 new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
                 new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
-                if st.form_submit_button("💾 保存逻辑与年化"):
-                    c.execute("INSERT OR REPLACE INTO strategy_notes (code, logic, max_holding_amount, annual_return) VALUES (?,?,?,?)", 
-                              (selected_stock, new_logic, max_occupied_amount, new_annual))
+                
+                st.write("---")
+                st.write("**📥 买入监控设置**")
+                col_b1, col_b2 = st.columns(2)
+                new_buy_base = col_b1.number_input("买入基准价", value=float(s_buy_base), step=0.01)
+                new_buy_drop = col_b2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
+                
+                st.write("**📤 卖出监控设置**")
+                col_s1, col_s2 = st.columns(2)
+                new_sell_base = col_s1.number_input("卖出基准价", value=float(s_sell_base), step=0.01)
+                new_sell_rise = col_s2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
+                
+                if st.form_submit_button("💾 保存所有设置"):
+                    c.execute("""
+                        INSERT OR REPLACE INTO strategy_notes 
+                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
+                        VALUES (?,?,?,?,?,?,?,?)
+                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
                     conn.commit()
                     st.success("已保存")
                     st.rerun()
