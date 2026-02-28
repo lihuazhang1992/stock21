@@ -242,7 +242,9 @@ if choice == "📈 策略复盘":
             if t['action'] == '买入':
                 # 1. 检查是否有卖空单需要回补（平仓卖空）
                 remaining_to_buy = qty
+                # 利润最大化原则：回补卖空时，优先回补价格最高的卖空单（利润更大）
                 while remaining_to_buy > 0 and sell_pool:
+                    sell_pool.sort(key=lambda x: x['price'], reverse=True) # 价格最高优先
                     sp = sell_pool[0]
                     match_q = min(remaining_to_buy, sp['qty'])
                     realized_profit += (sp['price'] - price) * match_q
@@ -258,7 +260,9 @@ if choice == "📈 策略复盘":
             else: # 卖出
                 # 1. 检查是否有买入单需要平仓
                 remaining_to_sell = qty
+                # 利润最大化原则：卖出时，优先平仓价格最低的买入单（利润更大）
                 while remaining_to_sell > 0 and buy_pool:
+                    buy_pool.sort(key=lambda x: x['price']) # 价格最低优先
                     bp = buy_pool[0]
                     match_q = min(remaining_to_sell, bp['qty'])
                     realized_profit += (price - bp['price']) * match_q
