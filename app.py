@@ -303,11 +303,27 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
-        saved_logic = strategy_data[0] if strategy_data else ""
-        saved_annual = strategy_data[1] if strategy_data else 0.0
-        saved_buy_logic = strategy_data[6] if strategy_data and strategy_data[6] else ""
-        saved_sell_logic = strategy_data[7] if strategy_data and strategy_data[7] else "" 
+        # 使用更安全的字典方式读取数据，防止字段顺序或缺失导致的报错
+        strategy_df = pd.read_sql("SELECT * FROM strategy_notes WHERE code = ?", conn, params=(selected_stock,))
+        if not strategy_df.empty:
+            s_row = strategy_df.iloc[0]
+            saved_logic = s_row.get('logic', "")
+            saved_annual = s_row.get('annual_return', 0.0)
+            s_buy_base = s_row.get('buy_base_price', 0.0)
+            s_buy_drop = s_row.get('buy_drop_pct', 0.0)
+            s_sell_base = s_row.get('sell_base_price', 0.0)
+            s_sell_rise = s_row.get('sell_rise_pct', 0.0)
+            saved_buy_logic = s_row.get('buy_logic', "")
+            saved_sell_logic = s_row.get('sell_logic', "")
+        else:
+            saved_logic = ""
+            saved_annual = 0.0
+            s_buy_base = 0.0
+            s_buy_drop = 0.0
+            s_sell_base = 0.0
+            s_sell_rise = 0.0
+            saved_buy_logic = ""
+            saved_sell_logic = "" 
         s_buy_base = strategy_data[2] if strategy_data else 0.0
         s_buy_drop = strategy_data[3] if strategy_data else 0.0
         s_sell_base = strategy_data[4] if strategy_data else 0.0
