@@ -179,15 +179,6 @@ try:
 except sqlite3.OperationalError:
     pass
 conn.commit()
-
-try:
-    c.execute("ALTER TABLE strategy_notes ADD COLUMN buy_base_price REAL DEFAULT 0.0")
-    c.execute("ALTER TABLE strategy_notes ADD COLUMN buy_drop_pct REAL DEFAULT 0.0")
-    c.execute("ALTER TABLE strategy_notes ADD COLUMN sell_base_price REAL DEFAULT 0.0")
-    c.execute("ALTER TABLE strategy_notes ADD COLUMN sell_rise_pct REAL DEFAULT 0.0")
-except:
-    pass
-
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
 
@@ -303,70 +294,41 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
+        strategy_data = c.execute("SELECT logic, annual_return FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
         saved_logic = strategy_data[0] if strategy_data else ""
         saved_annual = strategy_data[1] if strategy_data else 0.0
-        s_buy_base = strategy_data[2] if strategy_data else 0.0
-        s_buy_drop = strategy_data[3] if strategy_data else 0.0
-        s_sell_base = strategy_data[4] if strategy_data else 0.0
-        s_sell_rise = strategy_data[5] if strategy_data else 0.0
 
         # --- 第一区：核心指标卡片 ---
         st.subheader(f"📊 {selected_stock} 核心数据概览")
-
-        # --- 1. 数据准备 ---
-        # 计算监控价与状态
-        buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100) if s_buy_base > 0 else 0
-        sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100) if s_sell_base > 0 else 0
-        is_buy_triggered = (s_buy_base > 0 and now_p <= buy_monitor_p)
-        is_sell_triggered = (s_sell_base > 0 and now_p >= sell_monitor_p)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("持仓数量", f"{net_q}")
+        c1.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
+        
+        c2.metric("成本价", f"{avg_cost:.3f}")
+        c2.metric("当前现价", f"{now_p:.3f}")
+        
+        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
+        c3.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
+        c3.metric("已实现利润", f"{realized_profit:,.2f}")
+        
+        c4.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
+        
+        c4.metric("历史年化收益", f"{saved_annual:.2f}%")
         
         # 获取涨跌周期平均值
         cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
-        up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean() if not cycles_data.empty else 0
-        down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean() if not cycles_data.empty else 0
-
-        # --- 2. 3行x4列 固定网格展示 ---
-        # 第一行：持仓基础数据
-        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("持仓数量", f"{net_q}")
-        r1c2.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
-        r1c3.metric("成本价", f"{avg_cost:.3f}")
-        r1c4.metric("当前现价", f"{now_p:.3f}")
-
-        # 第二行：盈亏与收益
-        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
-        r2c1.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
-        r2c2.metric("已实现利润", f"{realized_profit:,.2f}")
-        r2c3.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
-        r2c4.metric("历史年化收益", f"{saved_annual:.2f}%")
-
-        # 第三行：监控与涨跌幅 (固定位置)
-        r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+        if not cycles_data.empty:
+            up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean()
+            down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean()
+            c1.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
+            c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         
-        # 买入监控价
-        if s_buy_base > 0:
-            b_label = "🔴 买入监控 (达标)" if is_buy_triggered else "📥 买入监控 (观察)"
-            r3c1.metric(b_label, f"{buy_monitor_p:.3f}")
-        else:
-            r3c1.metric("📥 买入监控", "未设置")
-            
-        # 卖出监控价
-        if s_sell_base > 0:
-            s_label = "🔴 卖出监控 (达标)" if is_sell_triggered else "📤 卖出监控 (观察)"
-            r3c2.metric(s_label, f"{sell_monitor_p:.3f}")
-        else:
-            r3c2.metric("📤 卖出监控", "未设置")
-
-        # 平均涨跌幅 (强制显示)
-        r3c3.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
-        r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
+        # 在核心区展示当前逻辑
         if saved_logic:
             st.markdown(f"""
-            <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-                <h4 style="margin-top:0; color:#00C49F; font-size:1.2em; font-weight:bold; margin-bottom:10px;">🧠 当前交易逻辑</h4>
-                <div style="white-space: pre-wrap; font-size: 1.1em; color:#FFFFFF; font-weight: 500; line-height: 1.6;">{saved_logic}</div>
+            <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
+                <h4 style="margin-top:0; color:#009879; font-size:1.1em;">🧠 当前交易逻辑</h4>
+                <p style="white-space: pre-wrap; font-size: 0.9em; color:#ddd;">{saved_logic}</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -380,24 +342,9 @@ if choice == "📈 策略复盘":
             with st.form("strategy_form"):
                 new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
                 new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
-                
-                st.write("---")
-                st.write("**📥 买入监控设置**")
-                col_b1, col_b2 = st.columns(2)
-                new_buy_base = col_b1.number_input("买入基准价", value=float(s_buy_base), step=0.01)
-                new_buy_drop = col_b2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
-                
-                st.write("**📤 卖出监控设置**")
-                col_s1, col_s2 = st.columns(2)
-                new_sell_base = col_s1.number_input("卖出基准价", value=float(s_sell_base), step=0.01)
-                new_sell_rise = col_s2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
-                
-                if st.form_submit_button("💾 保存所有设置"):
-                    c.execute("""
-                        INSERT OR REPLACE INTO strategy_notes 
-                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
-                        VALUES (?,?,?,?,?,?,?,?)
-                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
+                if st.form_submit_button("💾 保存逻辑与年化"):
+                    c.execute("INSERT OR REPLACE INTO strategy_notes (code, logic, max_holding_amount, annual_return) VALUES (?,?,?,?)", 
+                              (selected_stock, new_logic, max_occupied_amount, new_annual))
                     conn.commit()
                     st.success("已保存")
                     st.rerun()
