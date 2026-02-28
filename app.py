@@ -146,7 +146,42 @@ try:
     c.execute("ALTER TABLE trades ADD COLUMN note TEXT")
 except sqlite3.OperationalError:
     pass
+
+# --- 新模块: 股票档案 - 新表创建 ---
+c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_logic (
+        code TEXT PRIMARY KEY,
+        buy_logic TEXT,
+        sell_logic TEXT
+    )
+''')
+c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT,
+        date TEXT,
+        decision TEXT,
+        reason TEXT
+    )
+''')
+c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_performance (
+        code TEXT PRIMARY KEY,
+        avg_annual_return REAL,
+        peak_holding_value REAL
+    )
+''')
+c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_cycles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        change REAL
+    )
+''')
 conn.commit()
+
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
 
@@ -170,7 +205,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. 侧边栏导航 ---
-menu = ["📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
+menu = ["📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记", "📂 股票档案"]
 choice = st.sidebar.radio("功能导航", menu)
 
 # --- 实时持仓 ---
@@ -1009,7 +1044,121 @@ elif choice == "📓 复盘日记":
 
             st.caption(f"共 {len(journal_df)} 条记录，当前显示 {len(display_df)} 条")
 
+# --- 新模块: 股票档案 ---
+elif choice == "📂 股票档案":
+    st.header("📂 股票档案")
 
+    stocks = get_dynamic_stock_list()
+    selected_stock = st.selectbox("选择股票", stocks)
+
+    if selected_stock:
+        # 从其他模块调用数据
+        df_trades = pd.read_sql(f"SELECT * FROM trades WHERE code = '{selected_stock}'", conn)
+        current_price_row = c.execute(f"SELECT current_price, manual_cost FROM prices WHERE code = '{selected_stock}'").fetchone()
+        current_price = current_price_row[0] if current_price_row else 0.0
+        manual_cost = current_price_row[1] if current_price_row else 0.0
+
+        # 计算持仓数量
+        net_quantity = df_trades[df_trades['action'] == '买入']['quantity'].sum() - df_trades[df_trades['action'] == '卖出']['quantity'].sum()
+
+        # 持仓市值
+        holding_value = net_quantity * current_price if net_quantity > 0 else 0.0
+
+        # 持仓盈亏比例和金额
+        holding_profit_pct = ((current_price - manual_cost) / manual_cost * 100) if manual_cost > 0 and net_quantity != 0 else 0.0
+        holding_profit_amt = (current_price - manual_cost) * net_quantity if net_quantity > 0 else 0.0
+
+        # 已完成交易利润 (从盈利账单逻辑调用)
+        total_buy_cash = df_trades[df_trades['action'] == '买入'].apply(lambda r: r['price'] * r['quantity'], axis=1).sum()
+        total_sell_cash = df_trades[df_trades['action'] == '卖出'].apply(lambda r: r['price'] * r['quantity'], axis=1).sum()
+        completed_profit = total_sell_cash - total_buy_cash + holding_value if net_quantity <= 0 else total_sell_cash - (total_buy_cash - holding_value)
+
+        # 最高峰持仓金额 (从 performance 表手动录入，或计算历史最大)
+        performance_row = c.execute(f"SELECT avg_annual_return, peak_holding_value FROM stock_performance WHERE code = '{selected_stock}'").fetchone()
+        avg_annual_return = performance_row[0] if performance_row else 0.0
+        peak_holding_value = performance_row[1] if performance_row else 0.0  # 手动录入
+
+        # 显示持仓信息
+        st.subheader("持仓信息")
+        st.write(f"持仓数量: {net_quantity}")
+        st.write(f"持仓市值: {holding_value:.2f}")
+        st.write(f"成本价: {manual_cost:.2f}")
+        st.write(f"现价: {current_price:.2f}")
+        st.write(f"已完成交易利润: {completed_profit:.2f}")
+        st.write(f"持仓盈亏比例: {holding_profit_pct:.2f}%")
+        st.write(f"持仓盈亏金额: {holding_profit_amt:.2f}")
+        st.write(f"最高峰持仓金额: {peak_holding_value:.2f}")
+        st.write(f"历史平均年化收益率: {avg_annual_return:.2f}%")
+
+        # 交易逻辑 (手动录入)
+        st.subheader("交易逻辑")
+        logic_row = c.execute(f"SELECT buy_logic, sell_logic FROM stock_logic WHERE code = '{selected_stock}'").fetchone()
+        buy_logic = logic_row[0] if logic_row else ""
+        sell_logic = logic_row[1] if logic_row else ""
+        new_buy_logic = st.text_area("买入逻辑", value=buy_logic)
+        new_sell_logic = st.text_area("卖出逻辑", value=sell_logic)
+        if st.button("保存交易逻辑"):
+            c.execute("INSERT OR REPLACE INTO stock_logic (code, buy_logic, sell_logic) VALUES (?, ?, ?)", (selected_stock, new_buy_logic, new_sell_logic))
+            conn.commit()
+            thread = threading.Thread(target=sync_db_to_github, daemon=True)
+            thread.start()
+            st.success("交易逻辑已保存")
+
+        # 决策历史 (手动录入)
+        st.subheader("决策历史")
+        decisions_df = pd.read_sql(f"SELECT date, decision, reason FROM stock_decisions WHERE code = '{selected_stock}' ORDER BY date DESC", conn)
+        if not decisions_df.empty:
+            st.dataframe(decisions_df)
+        with st.form("add_decision"):
+            decision_date = st.date_input("日期")
+            decision = st.text_input("决策")
+            reason = st.text_area("原因")
+            if st.form_submit_button("添加决策"):
+                c.execute("INSERT INTO stock_decisions (code, date, decision, reason) VALUES (?, ?, ?, ?)", (selected_stock, decision_date.strftime('%Y-%m-%d'), decision, reason))
+                conn.commit()
+                thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                thread.start()
+                st.success("决策已添加")
+                st.rerun()
+
+        # 涨跌周期 (手动录入)
+        st.subheader("涨跌周期")
+        cycles_df = pd.read_sql(f"SELECT start_date, end_date, change FROM stock_cycles WHERE code = '{selected_stock}' ORDER BY start_date", conn)
+        if not cycles_df.empty:
+            for _, row in cycles_df.iterrows():
+                change_str = f"{row['change']:.2f}%" if row['change'] > 0 else f"({row['change']:.2f}%)"
+                st.write(f"{row['start_date']} → {row['end_date']} ({change_str})")
+
+            # 计算平均涨幅和跌幅
+            rises = cycles_df[cycles_df['change'] > 0]['change']
+            falls = cycles_df[cycles_df['change'] < 0]['change']
+            avg_rise = rises.mean() if not rises.empty else 0.0
+            avg_fall = falls.mean() if not falls.empty else 0.0
+            st.write(f"平均涨幅: {avg_rise:.2f}%")
+            st.write(f"平均跌幅: {avg_fall:.2f}%")
+
+        with st.form("add_cycle"):
+            start_date = st.date_input("起始日期")
+            end_date = st.date_input("结束日期")
+            change = st.number_input("变化 (%)", step=0.01)
+            if st.form_submit_button("添加周期"):
+                c.execute("INSERT INTO stock_cycles (code, start_date, end_date, change) VALUES (?, ?, ?, ?)", (selected_stock, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'), change))
+                conn.commit()
+                thread = threading.Thread(target=sync_db_to_github, daemon=True)
+                thread.start()
+                st.success("涨跌周期已添加")
+                st.rerun()
+
+        # 手动录入性能数据
+        st.subheader("更新性能数据")
+        new_avg_return = st.number_input("历史平均年化收益率 (%)", value=avg_annual_return)
+        new_peak_value = st.number_input("最高峰持仓金额", value=peak_holding_value)
+        if st.button("保存性能数据"):
+            c.execute("INSERT OR REPLACE INTO stock_performance (code, avg_annual_return, peak_holding_value) VALUES (?, ?, ?)", (selected_stock, new_avg_return, new_peak_value))
+            conn.commit()
+            thread = threading.Thread(target=sync_db_to_github, daemon=True)
+            thread.start()
+            st.success("性能数据已保存")
 
 # --- 下载数据库按钮 ---
 col1, col2, col3 = st.columns([5, 1, 1])
