@@ -337,42 +337,6 @@ if choice == "📈 策略复盘":
             c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         
         
-        # --- 极简监控展示 ---
-        st.markdown("---")
-        m_col1, m_col2 = st.columns(2)
-        
-        # 买入监控 (现价 <= 监控价 则标红)
-        if s_buy_base > 0:
-            buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100)
-            is_triggered = now_p <= buy_monitor_p
-            status_text = "🔴 已达标" if is_triggered else "⚪ 未达标"
-            color = "#FF4B4B" if is_triggered else "#888"
-            m_col1.markdown(f"""
-                <div style="padding:10px; border:1px solid {color}; border-radius:5px; background:{color}11;">
-                    <div style="font-size:0.8em; color:{color};">📥 买入监控价 ({status_text})</div>
-                    <div style="font-size:1.5em; font-weight:bold; color:{color};">{buy_monitor_p:.3f}</div>
-                    <div style="font-size:0.7em; color:#666;">基准: {s_buy_base:.3f} | 跌幅: {s_buy_drop}%</div>
-                </div>
-            """, unsafe_allow_html=True)
-        else:
-            m_col1.caption("未设置买入监控")
-
-        # 卖出监控 (现价 >= 监控价 则标红)
-        if s_sell_base > 0:
-            sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100)
-            is_triggered = now_p >= sell_monitor_p
-            status_text = "🔴 已达标" if is_triggered else "⚪ 未达标"
-            color = "#FF4B4B" if is_triggered else "#888"
-            m_col2.markdown(f"""
-                <div style="padding:10px; border:1px solid {color}; border-radius:5px; background:{color}11;">
-                    <div style="font-size:0.8em; color:{color};">📤 卖出监控价 ({status_text})</div>
-                    <div style="font-size:1.5em; font-weight:bold; color:{color};">{sell_monitor_p:.3f}</div>
-                    <div style="font-size:0.7em; color:#666;">基准: {s_sell_base:.3f} | 涨幅: {s_sell_rise}%</div>
-                </div>
-            """, unsafe_allow_html=True)
-        else:
-            m_col2.caption("未设置卖出监控")
-
         # 在核心区展示当前逻辑
         if saved_logic:
             st.markdown(f"""
