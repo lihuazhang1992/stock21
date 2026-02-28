@@ -337,55 +337,41 @@ if choice == "📈 策略复盘":
             c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         
         
-        # --- 监控价逻辑计算与展示 ---
+        # --- 极简监控展示 ---
         st.markdown("---")
         m_col1, m_col2 = st.columns(2)
         
-        # 买入监控
+        # 买入监控 (现价 <= 监控价 则标红)
         if s_buy_base > 0:
             buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100)
-            if now_p > s_buy_base:
-                b_status = "🟢 已反弹 (现价 > 基准价)"
-                b_color = "#4CAF50"
-            elif now_p <= buy_monitor_p:
-                b_status = "🔴 已达标 (现价 ≤ 监控价)"
-                b_color = "#F44336"
-            else:
-                b_status = "🟡 观察中 (未达监控价)"
-                b_color = "#FFC107"
-            
+            is_triggered = now_p <= buy_monitor_p
+            status_text = "🔴 已达标" if is_triggered else "⚪ 未达标"
+            color = "#FF4B4B" if is_triggered else "#888"
             m_col1.markdown(f"""
-            <div style="background: {b_color}22; border: 1px solid {b_color}; border-radius: 8px; padding: 12px;">
-                <div style="font-size: 0.8em; color: {b_color}; font-weight: bold;">📥 买入监控状态</div>
-                <div style="font-size: 1.1em; margin: 4px 0;">{b_status}</div>
-                <div style="font-size: 0.85em; color: #888;">基准: {s_buy_base:.3f} | 监控价: <b>{buy_monitor_p:.3f}</b> (-{s_buy_drop}%)</div>
-            </div>
+                <div style="padding:10px; border:1px solid {color}; border-radius:5px; background:{color}11;">
+                    <div style="font-size:0.8em; color:{color};">📥 买入监控价 ({status_text})</div>
+                    <div style="font-size:1.5em; font-weight:bold; color:{color};">{buy_monitor_p:.3f}</div>
+                    <div style="font-size:0.7em; color:#666;">基准: {s_buy_base:.3f} | 跌幅: {s_buy_drop}%</div>
+                </div>
             """, unsafe_allow_html=True)
         else:
-            m_col1.info("未设置买入监控")
+            m_col1.caption("未设置买入监控")
 
-        # 卖出监控
+        # 卖出监控 (现价 >= 监控价 则标红)
         if s_sell_base > 0:
             sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100)
-            if now_p < s_sell_base:
-                s_status = "🟢 已回落 (现价 < 基准价)"
-                s_color = "#4CAF50"
-            elif now_p >= sell_monitor_p:
-                s_status = "🔴 已达标 (现价 ≥ 监控价)"
-                s_color = "#F44336"
-            else:
-                s_status = "🟡 观察中 (未达监控价)"
-                s_color = "#FFC107"
-            
+            is_triggered = now_p >= sell_monitor_p
+            status_text = "🔴 已达标" if is_triggered else "⚪ 未达标"
+            color = "#FF4B4B" if is_triggered else "#888"
             m_col2.markdown(f"""
-            <div style="background: {s_color}22; border: 1px solid {s_color}; border-radius: 8px; padding: 12px;">
-                <div style="font-size: 0.8em; color: {s_color}; font-weight: bold;">📤 卖出监控状态</div>
-                <div style="font-size: 1.1em; margin: 4px 0;">{s_status}</div>
-                <div style="font-size: 0.85em; color: #888;">基准: {s_sell_base:.3f} | 监控价: <b>{sell_monitor_p:.3f}</b> (+{s_sell_rise}%)</div>
-            </div>
+                <div style="padding:10px; border:1px solid {color}; border-radius:5px; background:{color}11;">
+                    <div style="font-size:0.8em; color:{color};">📤 卖出监控价 ({status_text})</div>
+                    <div style="font-size:1.5em; font-weight:bold; color:{color};">{sell_monitor_p:.3f}</div>
+                    <div style="font-size:0.7em; color:#666;">基准: {s_sell_base:.3f} | 涨幅: {s_sell_rise}%</div>
+                </div>
             """, unsafe_allow_html=True)
         else:
-            m_col2.info("未设置卖出监控")
+            m_col2.caption("未设置卖出监控")
 
         # 在核心区展示当前逻辑
         if saved_logic:
