@@ -128,38 +128,6 @@ c.execute('''
         content TEXT
     )
 ''')
-
-c.execute('''
-    CREATE TABLE IF NOT EXISTS strategy_notes (
-        code TEXT PRIMARY KEY,
-        logic TEXT,
-        max_holding_amount REAL DEFAULT 0.0,
-        annual_return REAL DEFAULT 0.0
-    )
-''')
-c.execute('''
-    CREATE TABLE IF NOT EXISTS decision_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT,
-        date TEXT,
-        decision TEXT,
-        reason TEXT
-    )
-''')
-c.execute('''
-    CREATE TABLE IF NOT EXISTS price_cycles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT,
-        start_date TEXT,
-        end_date TEXT,
-        change_pct REAL
-    )
-''')
-# 动态增加缺失列（兼容旧版本）
-try:
-    c.execute("ALTER TABLE strategy_notes ADD COLUMN annual_return REAL DEFAULT 0.0")
-except:
-    pass
 c.execute('''
     CREATE TABLE IF NOT EXISTS price_targets (
         code TEXT PRIMARY KEY,
@@ -202,221 +170,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. 侧边栏导航 ---
-menu = ["📈 策略复盘", "📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
+menu = ["📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
 choice = st.sidebar.radio("功能导航", menu)
 
 # --- 实时持仓 ---
-
-# --- 📈 策略复盘 ---
-if choice == "📈 策略复盘":
-    st.header("📈 策略复盘与深度账本")
-    
-    all_stocks = get_dynamic_stock_list()
-    df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
-    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
-    latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
-    manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
-    
-    # 统一选择股票
-    selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None)
-    
-    if selected_stock:
-        s_df = df_trades[df_trades['code'] == selected_stock].copy()
-        now_p = latest_prices.get(selected_stock, 0.0)
-        
-        # --- 核心计算：已实现利润与最高持仓占用 ---
-        realized_profit = 0.0
-        max_occupied_amount = 0.0
-        current_occupied_amount = 0.0
-        
-        buy_pool = []  # 存储买入单：{'price': p, 'qty': q}
-        sell_pool = [] # 存储卖空单：{'price': p, 'qty': q}
-        
-        net_q = 0
-        total_cost_basis = 0.0
-        
-        for _, t in s_df.iterrows():
-            price = t['price']
-            qty = t['quantity']
-            
-            if t['action'] == '买入':
-                # 1. 检查是否有卖空单需要回补（平仓卖空）
-                remaining_to_buy = qty
-                # 利润最大化原则：回补卖空时，优先回补价格最高的卖空单（利润更大）
-                while remaining_to_buy > 0 and sell_pool:
-                    sell_pool.sort(key=lambda x: x['price'], reverse=True) # 价格最高优先
-                    sp = sell_pool[0]
-                    match_q = min(remaining_to_buy, sp['qty'])
-                    realized_profit += (sp['price'] - price) * match_q
-                    sp['qty'] -= match_q
-                    remaining_to_buy -= match_q
-                    if sp['qty'] <= 0: sell_pool.pop(0)
-                
-                # 2. 剩余部分作为买入开仓
-                if remaining_to_buy > 0:
-                    buy_pool.append({'price': price, 'qty': remaining_to_buy})
-                
-                net_q += qty
-            else: # 卖出
-                # 1. 检查是否有买入单需要平仓
-                remaining_to_sell = qty
-                # 利润最大化原则：卖出时，优先平仓价格最低的买入单（利润更大）
-                while remaining_to_sell > 0 and buy_pool:
-                    buy_pool.sort(key=lambda x: x['price']) # 价格最低优先
-                    bp = buy_pool[0]
-                    match_q = min(remaining_to_sell, bp['qty'])
-                    realized_profit += (price - bp['price']) * match_q
-                    bp['qty'] -= match_q
-                    remaining_to_sell -= match_q
-                    if bp['qty'] <= 0: buy_pool.pop(0)
-                
-                # 2. 剩余部分作为卖空开仓
-                if remaining_to_sell > 0:
-                    sell_pool.append({'price': price, 'qty': remaining_to_sell})
-                
-                net_q -= qty
-            
-            # 计算当前占用金额 (所有未平仓单的成本总额)
-            current_occupied_amount = sum(x['price'] * x['qty'] for x in buy_pool) + sum(x['price'] * x['qty'] for x in sell_pool)
-            max_occupied_amount = max(max_occupied_amount, current_occupied_amount)
-
-        # 当前持仓成本价（直接调用手动录入成本）与盈亏
-        avg_cost = manual_costs.get(selected_stock, 0.0)
-        if net_q > 0: # 净买入持仓
-            holding_profit_amount = (now_p - avg_cost) * net_q
-            holding_profit_pct = (now_p - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
-        elif net_q < 0: # 净卖空持仓
-            abs_q = abs(net_q)
-            holding_profit_amount = (avg_cost - now_p) * abs_q
-            holding_profit_pct = (avg_cost - now_p) / avg_cost * 100 if avg_cost > 0 else 0
-        else:
-            holding_profit_amount = 0.0
-            holding_profit_pct = 0.0
-
-        # 读取手动录入数据
-        strategy_data = c.execute("SELECT logic, annual_return FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
-        saved_logic = strategy_data[0] if strategy_data else ""
-        saved_annual = strategy_data[1] if strategy_data else 0.0
-
-        # --- 第一区：核心指标卡片 ---
-        st.subheader(f"📊 {selected_stock} 核心数据概览")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("持仓数量", f"{net_q}")
-        c1.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
-        
-        c2.metric("成本价", f"{avg_cost:.3f}")
-        c2.metric("当前现价", f"{now_p:.3f}")
-        
-        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
-        c3.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
-        c3.metric("已实现利润", f"{realized_profit:,.2f}")
-        
-        c4.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
-        
-        c4.metric("历史年化收益", f"{saved_annual:.2f}%")
-        
-        # 获取涨跌周期平均值
-        cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
-        if not cycles_data.empty:
-            up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean()
-            down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean()
-            c1.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
-            c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
-        
-        # 在核心区展示当前逻辑
-        if saved_logic:
-            st.markdown(f"""
-            <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
-                <h4 style="margin-top:0; color:#009879; font-size:1.1em;">🧠 当前交易逻辑</h4>
-                <p style="white-space: pre-wrap; font-size: 0.9em; color:#ddd;">{saved_logic}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.divider()
-
-        # --- 第二区：交易逻辑与决策历史 ---
-        col_left, col_right = st.columns([1, 1])
-        
-        with col_left:
-            st.subheader("🧠 交易逻辑与参数设置")
-            with st.form("strategy_form"):
-                new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
-                new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
-                if st.form_submit_button("💾 保存逻辑与年化"):
-                    c.execute("INSERT OR REPLACE INTO strategy_notes (code, logic, max_holding_amount, annual_return) VALUES (?,?,?,?)", 
-                              (selected_stock, new_logic, max_occupied_amount, new_annual))
-                    conn.commit()
-                    st.success("已保存")
-                    st.rerun()
-            
-            if saved_logic:
-                st.info(f"**当前逻辑存档：**\n\n{saved_logic}")
-
-        with col_right:
-            st.subheader("📜 决策历史记录")
-            with st.expander("➕ 新增决策记录"):
-                with st.form("new_decision", clear_on_submit=True):
-                    d_date = st.date_input("日期", datetime.now())
-                    d_content = st.text_input("决策内容", placeholder="例如：减仓30%")
-                    d_reason = st.text_area("决策原因", placeholder="为什么做这个决策？")
-                    if st.form_submit_button("记录决策"):
-                        c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)", 
-                                  (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
-                        conn.commit()
-                        st.rerun()
-            
-            # 决策历史列表与删除
-            decisions = pd.read_sql("SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC", conn, params=(selected_stock,))
-            for _, row in decisions.iterrows():
-                with st.container(border=True):
-                    head_col, del_col = st.columns([9, 1])
-                    head_col.markdown(f"**{row['date']} | {row['decision']}**")
-                    if del_col.button("🗑️", key=f"del_dec_{row['id']}"):
-                        c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
-                        conn.commit()
-                        st.rerun()
-                    st.caption(row['reason'])
-
-        st.divider()
-
-        # --- 第三区：涨跌周期管理 ---
-        st.subheader("📉 历史涨跌周期统计")
-        cycle_input, cycle_list = st.columns([1, 2])
-        
-        with cycle_input:
-            with st.form("new_cycle", clear_on_submit=True):
-                st.write("**新增涨跌周期**")
-                cy_start = st.date_input("开始日期")
-                cy_end = st.date_input("结束日期")
-                cy_pct = st.number_input("涨跌幅 (%)", step=0.01)
-                if st.form_submit_button("添加周期"):
-                    c.execute("INSERT INTO price_cycles (code, start_date, end_date, change_pct) VALUES (?,?,?,?)", 
-                              (selected_stock, cy_start.strftime('%Y-%m-%d'), cy_end.strftime('%Y-%m-%d'), cy_pct))
-                    conn.commit()
-                    st.rerun()
-        
-        with cycle_list:
-            cycles = pd.read_sql("SELECT id, start_date, end_date, change_pct FROM price_cycles WHERE code = ? ORDER BY start_date DESC", conn, params=(selected_stock,))
-            if not cycles.empty:
-                up_avg = cycles[cycles['change_pct'] > 0]['change_pct'].mean()
-                down_avg = cycles[cycles['change_pct'] < 0]['change_pct'].mean()
-                st.markdown(f"📈 **平均涨幅:** `{up_avg:.2f}%` | 📉 **平均跌幅:** `{down_avg:.2f}%`")
-                
-                # 周期表格展示
-                for _, row in cycles.iterrows():
-                    c_col, d_col = st.columns([8, 2])
-                    color = "#d32f2f" if row['change_pct'] > 0 else "#388e3c"
-                    c_col.markdown(f"`{row['start_date']} → {row['end_date']}` <span style='color:{color}; font-weight:bold;'>({row['change_pct']:+.2f}%)</span>", unsafe_allow_html=True)
-                    if d_col.button("删除", key=f"del_cyc_{row['id']}"):
-                        c.execute("DELETE FROM price_cycles WHERE id = ?", (row['id'],))
-                        conn.commit()
-                        st.rerun()
-            else:
-                st.info("暂无涨跌周期记录")
-    else:
-        st.info("请先在交易录入中添加股票数据")
-
-elif choice == "📊 实时持仓":
+if choice == "📊 实时持仓":
     st.header("📊 持仓盈亏分析")
   
     # 动态格式化数字的工具函数：去除末尾无意义的0
@@ -667,9 +425,7 @@ elif choice == "📊 实时持仓":
 elif choice == "💰 盈利账单":
     st.header("💰 盈利账单 (总额对冲法)")
     df_trades = pd.read_sql("SELECT * FROM trades", conn)
-    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
-    latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
-    manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
+    latest_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
   
     if not df_trades.empty:
         profit_list = []
@@ -1199,7 +955,6 @@ elif choice == "📓 复盘日记":
     with st.expander("✍️ 写新日记", expanded=True):
         stock_options = ["大盘"] + get_dynamic_stock_list()
         ds = st.selectbox("复盘对象", options=stock_options, index=None, key="new_journal_stock")
-        st.caption("🎨 提示：支持 HTML 颜色标签，如 <span style='color:red'>红色文字</span>")
         content = st.text_area("心得内容", height=150, key="new_journal_content", placeholder="支持换行、列表、空格等格式")
         if st.button("保存日记", type="primary"):
             if ds and content.strip():
