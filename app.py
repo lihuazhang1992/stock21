@@ -420,14 +420,28 @@ if choice == "📈 策略复盘":
                 new_sell_rise = col_s2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
                 
                 if st.form_submit_button("💾 保存所有设置"):
-                    c.execute("""
-                        INSERT OR REPLACE INTO strategy_notes 
-                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic) 
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """, (selected_stock, saved_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise, new_buy_logic, new_sell_logic))
-                    conn.commit()
-                    st.success("已保存")
-                    st.rerun()
+                    # 保存前最后一秒：再次强制检查字段是否存在
+                    ensure_columns_exist(conn)
+                    try:
+                        c.execute("""
+                            INSERT OR REPLACE INTO strategy_notes 
+                            (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic) 
+                            VALUES (?,?,?,?,?,?,?,?,?,?)
+                        """, (selected_stock, saved_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise, new_buy_logic, new_sell_logic))
+                        conn.commit()
+                        st.success("✅ 配置已成功保存")
+                        st.rerun()
+                    except sqlite3.OperationalError:
+                        # 极端防御：如果全量插入失败，尝试最小化插入（仅保存核心字段）
+                        try:
+                            c.execute("""
+                                INSERT OR REPLACE INTO strategy_notes (code, logic, max_holding_amount, annual_return) 
+                                VALUES (?,?,?,?)
+                            """, (selected_stock, saved_logic, max_occupied_amount, new_annual))
+                            conn.commit()
+                            st.warning("⚠️ 部分新字段保存失败（数据库升级中），已优先保存核心数据。请刷新页面重试。")
+                        except Exception as e:
+                            st.error(f"❌ 严重错误：无法保存配置 - {e}")
             
 
 
