@@ -313,25 +313,55 @@ if choice == "📈 策略复盘":
 
         # --- 第一区：核心指标卡片 ---
         st.subheader(f"📊 {selected_stock} 核心数据概览")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("持仓数量", f"{net_q}")
-        c1.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
-        
-        c2.metric("成本价", f"{avg_cost:.3f}")
-        c2.metric("当前现价", f"{now_p:.3f}")
-        
-        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
-        c3.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
-        c3.metric("已实现利润", f"{realized_profit:,.2f}")
-        
-        c4.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
-        
-        c4.metric("历史年化收益", f"{saved_annual:.2f}%")
-        
 
+        # --- 1. 数据准备 ---
+        # 计算监控价与状态
+        buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100) if s_buy_base > 0 else 0
+        sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100) if s_sell_base > 0 else 0
+        is_buy_triggered = (s_buy_base > 0 and now_p <= buy_monitor_p)
+        is_sell_triggered = (s_sell_base > 0 and now_p >= sell_monitor_p)
         
+        # 获取涨跌周期平均值
+        cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
+        up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean() if not cycles_data.empty else 0
+        down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean() if not cycles_data.empty else 0
+
+        # --- 2. 3行x4列 固定网格展示 ---
+        # 第一行：持仓基础数据
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        r1c1.metric("持仓数量", f"{net_q}")
+        r1c2.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
+        r1c3.metric("成本价", f"{avg_cost:.3f}")
+        r1c4.metric("当前现价", f"{now_p:.3f}")
+
+        # 第二行：盈亏与收益
+        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
+        r2c1.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
+        r2c2.metric("已实现利润", f"{realized_profit:,.2f}")
+        r2c3.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
+        r2c4.metric("历史年化收益", f"{saved_annual:.2f}%")
+
+        # 第三行：监控与涨跌幅 (固定位置)
+        r3c1, r3c2, r3c3, r3c4 = st.columns(4)
         
-        # 在核心区展示当前逻辑
+        # 买入监控价
+        if s_buy_base > 0:
+            b_label = "🔴 买入监控 (达标)" if is_buy_triggered else "📥 买入监控 (观察)"
+            r3c1.metric(b_label, f"{buy_monitor_p:.3f}")
+        else:
+            r3c1.metric("📥 买入监控", "未设置")
+            
+        # 卖出监控价
+        if s_sell_base > 0:
+            s_label = "🔴 卖出监控 (达标)" if is_sell_triggered else "📤 卖出监控 (观察)"
+            r3c2.metric(s_label, f"{sell_monitor_p:.3f}")
+        else:
+            r3c2.metric("📤 卖出监控", "未设置")
+
+        # 平均涨跌幅 (强制显示)
+        r3c3.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
+        r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
         if saved_logic:
             st.markdown(f"""
             <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
