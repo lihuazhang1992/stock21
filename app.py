@@ -213,7 +213,9 @@ if choice == "📈 策略复盘":
     
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
-    latest_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
+    latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
+    manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
     
     # 统一选择股票
     selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None)
@@ -274,18 +276,16 @@ if choice == "📈 策略复盘":
             current_occupied_amount = sum(x['price'] * x['qty'] for x in buy_pool) + sum(x['price'] * x['qty'] for x in sell_pool)
             max_occupied_amount = max(max_occupied_amount, current_occupied_amount)
 
-        # 当前持仓成本价与盈亏
+        # 当前持仓成本价（直接调用手动录入成本）与盈亏
+        avg_cost = manual_costs.get(selected_stock, 0.0)
         if net_q > 0: # 净买入持仓
-            avg_cost = sum(x['price'] * x['qty'] for x in buy_pool) / net_q
             holding_profit_amount = (now_p - avg_cost) * net_q
             holding_profit_pct = (now_p - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
         elif net_q < 0: # 净卖空持仓
             abs_q = abs(net_q)
-            avg_cost = sum(x['price'] * x['qty'] for x in sell_pool) / abs_q
             holding_profit_amount = (avg_cost - now_p) * abs_q
             holding_profit_pct = (avg_cost - now_p) / avg_cost * 100 if avg_cost > 0 else 0
         else:
-            avg_cost = 0.0
             holding_profit_amount = 0.0
             holding_profit_pct = 0.0
 
@@ -645,7 +645,9 @@ elif choice == "📊 实时持仓":
 elif choice == "💰 盈利账单":
     st.header("💰 盈利账单 (总额对冲法)")
     df_trades = pd.read_sql("SELECT * FROM trades", conn)
-    latest_prices = {row[0]: row[1] for row in c.execute("SELECT code, current_price FROM prices").fetchall()}
+    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
+    latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
+    manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
   
     if not df_trades.empty:
         profit_list = []
