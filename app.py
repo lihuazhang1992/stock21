@@ -303,7 +303,7 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        # 使用更安全的字典方式读取数据，防止字段顺序或缺失导致的报错
+        # --- 安全读取策略数据 (防止 OperationalError 和 NameError) ---
         strategy_df = pd.read_sql("SELECT * FROM strategy_notes WHERE code = ?", conn, params=(selected_stock,))
         if not strategy_df.empty:
             s_row = strategy_df.iloc[0]
@@ -324,10 +324,6 @@ if choice == "📈 策略复盘":
             s_sell_rise = 0.0
             saved_buy_logic = ""
             saved_sell_logic = "" 
-        s_buy_base = strategy_data[2] if strategy_data else 0.0
-        s_buy_drop = strategy_data[3] if strategy_data else 0.0
-        s_sell_base = strategy_data[4] if strategy_data else 0.0
-        s_sell_rise = strategy_data[5] if strategy_data else 0.0
 
         # --- 第一区：核心指标卡片 ---
         st.subheader(f"📊 {selected_stock} 核心数据概览")
