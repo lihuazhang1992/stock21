@@ -179,6 +179,12 @@ try:
 except sqlite3.OperationalError:
     pass
 conn.commit()
+
+try:
+    c.execute("ALTER TABLE journal ADD COLUMN confidence INTEGER DEFAULT 3")
+except:
+    pass
+
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
 thread.start()
 
@@ -312,7 +318,25 @@ if choice == "📈 策略复盘":
         c3.metric("已实现利润", f"{realized_profit:,.2f}")
         
         c4.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
+        
         c4.metric("历史年化收益", f"{saved_annual:.2f}%")
+        
+        # 获取涨跌周期平均值
+        cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
+        if not cycles_data.empty:
+            up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean()
+            down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean()
+            c1.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
+            c2.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
+        
+        # 在核心区展示当前逻辑
+        if saved_logic:
+            st.markdown(f"""
+            <div style="background: rgba(255,255,255,0.05); border-radius: 10px; padding: 15px; border-left: 5px solid #009879; margin-top: 10px;">
+                <h4 style="margin-top:0; color:#009879;">🧠 当前交易逻辑</h4>
+                <p style="white-space: pre-wrap; font-size: 0.95em;">{saved_logic}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.divider()
 
@@ -1161,80 +1185,76 @@ elif choice == "📜 历史明细":
                         st.error(f"保存失败：{e}")
 
 # --- 复盘日记 ---
+
 elif choice == "📓 复盘日记":
-    st.header("📓 复盘日记")
+    st.header("📓 复盘日记 Pro")
+    
+    # 信心等级映射
+    stars = {1: "⭐", 2: "⭐⭐", 3: "⭐⭐⭐", 4: "⭐⭐⭐⭐", 5: "⭐⭐⭐⭐⭐"}
 
-    # 1) 建表
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS journal (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            stock_name TEXT,
-            content TEXT
-        )
-    """)
-    conn.commit()
-    thread = threading.Thread(target=sync_db_to_github, daemon=True)
-    thread.start()
-
-    # 2) 写新日记
-    with st.expander("✍️ 写新日记", expanded=True):
+    # 1) 写新日记（增强版）
+    with st.expander("✍️ 开启今日复盘", expanded=True):
         stock_options = ["大盘"] + get_dynamic_stock_list()
-        ds = st.selectbox("复盘对象", options=stock_options, index=None, key="new_journal_stock")
-        content = st.text_area("心得内容", height=150, key="new_journal_content", placeholder="支持换行、列表、空格等格式")
-        if st.button("保存日记", type="primary"):
+        
+        col_s1, col_s2, col_s3 = st.columns([2, 2, 1])
+        ds = col_s1.selectbox("复盘对象", options=stock_options, index=None, key="pro_journal_stock")
+        template = col_s2.selectbox("选择模板", ["空白", "逻辑梳理", "情绪记录", "失误反思", "机会发现"])
+        conf_level = col_s3.selectbox("信心指数", [1,2,3,4,5], index=2, format_func=lambda x: stars[x])
+        
+        # 模板内容逻辑
+        template_map = {
+            "逻辑梳理": "### 🔍 买入/卖出逻辑\n1. \n2. \n\n### 📊 支撑位/压力位\n- \n- ",
+            "情绪记录": "### 🧘 今日心态\n- [ ] 冷静\n- [ ] 焦虑\n- [ ] 贪婪\n\n### 💬 心情感悟\n",
+            "失误反思": "### ⚠️ 错误点\n- \n\n### 💡 改进方案\n- ",
+            "机会发现": "### 🔭 潜在标的\n- \n\n### 📅 观察要点\n- "
+        }
+        initial_content = template_map.get(template, "")
+        
+        # 工具栏提示
+        st.caption("💡 支持 Markdown: **加粗**, *斜体*, `代码`, > 引用, <span style='color:red'>红色</span>, <h3 style='font-size:30px'>大字</h3>")
+        content = st.text_area("心得内容 (支持富文本排版)", value=initial_content, height=250, key="pro_journal_content")
+        
+        if st.button("🚀 保存并存档", type="primary"):
             if ds and content.strip():
-                c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
-                          (datetime.now().strftime('%Y-%m-%d'), ds, content.strip()))
+                c.execute("INSERT INTO journal (date, stock_name, content, confidence) VALUES (?,?,?,?)",
+                          (datetime.now().strftime('%Y-%m-%d'), ds, content.strip(), conf_level))
                 conn.commit()
-                thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                thread.start()
-                st.success("已存档")
+                st.success("复盘已存档！")
                 st.rerun()
             else:
                 st.warning("请选择复盘对象并填写内容")
 
-    # 3) 展示（带删除按钮）
-    st.subheader("历史复盘记录")
-    journal_df = pd.read_sql("SELECT id, date, stock_name, content FROM journal ORDER BY date DESC, id DESC", conn)
+    # 2) 展示与搜索
+    st.subheader("📜 历史复盘记录")
+    j_df = pd.read_sql("SELECT * FROM journal ORDER BY date DESC, id DESC", conn)
 
-    if journal_df.empty:
-        st.info("暂无复盘记录")
+    if not j_df.empty:
+        f_col1, f_col2 = st.columns([1, 1])
+        u_stocks = ["全部"] + sorted(j_df['stock_name'].unique().tolist())
+        f_stock = f_col1.selectbox("按对象筛选", options=u_stocks)
+        f_search = f_col2.text_input("🔍 内容搜索")
+        
+        d_df = j_df if f_stock == "全部" else j_df[j_df['stock_name'] == f_stock]
+        if f_search:
+            d_df = d_df[d_df['content'].str.contains(f_search, case=False)]
+
+        for _, row in d_df.iterrows():
+            with st.container(border=True):
+                h1, h2, h3 = st.columns([2, 2, 1])
+                h1.markdown(f"**📅 {row['date']}**")
+                h2.markdown(f"**🏷️ {row['stock_name']}**")
+                h3.markdown(f"{stars.get(row['confidence'], '⭐⭐⭐')}")
+                
+                # 渲染富文本内容
+                st.markdown(row['content'], unsafe_allow_html=True)
+                
+                # 删除按钮
+                if st.button("🗑️ 删除记录", key=f"pro_del_{row['id']}"):
+                    c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
+                    conn.commit()
+                    st.rerun()
     else:
-        unique_stocks = ["全部"] + sorted(journal_df['stock_name'].unique().tolist())
-        filter_stock = st.selectbox("筛选股票/大盘", options=unique_stocks, index=0)
-        display_df = journal_df if filter_stock == "全部" else journal_df[journal_df['stock_name'] == filter_stock]
-
-        if display_df.empty:
-            st.info(f"没有与「{filter_stock}」相关的复盘记录")
-        else:
-            for _, row in display_df.iterrows():
-                # 删除按钮：二次确认
-                col1, col2 = st.columns([5, 1])
-                with col1:
-                    st.markdown(f"""
-                    <div style="background:#f7f7f7;border-left:4px solid #2196F3;border-radius:4px;padding:8px 10px;margin-bottom:4px;">
-                        <div style="font-size:0.85em;color:#555;">{row['date']} · {row['stock_name']}</div>
-                        <div style="white-space: pre-line;font-size:0.95em;margin-top:4px;">
-                            {row['content']}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with col2:
-                    if st.button("🗑️", key=f"del_{row['id']}"):
-                        if st.session_state.get(f"confirm_{row['id']}", False):
-                            c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
-                            conn.commit()
-                            thread = threading.Thread(target=sync_db_to_github, daemon=True)
-                            thread.start()
-                            st.success("已删除")
-                            st.rerun()
-                        else:
-                            st.session_state[f"confirm_{row['id']}"] = True
-                            st.warning("再点一次确认删除")
-
-            st.caption(f"共 {len(journal_df)} 条记录，当前显示 {len(display_df)} 条")
-
+        st.info("暂无复盘记录")
 
 
 # --- 下载数据库按钮 ---
