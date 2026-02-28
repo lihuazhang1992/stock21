@@ -303,9 +303,11 @@ if choice == "📈 策略复盘":
             holding_profit_pct = 0.0
 
         # 读取手动录入数据
-        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
+        strategy_data = c.execute("SELECT logic, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic FROM strategy_notes WHERE code = ?", (selected_stock,)).fetchone()
         saved_logic = strategy_data[0] if strategy_data else ""
         saved_annual = strategy_data[1] if strategy_data else 0.0
+        saved_buy_logic = strategy_data[6] if strategy_data and strategy_data[6] else ""
+        saved_sell_logic = strategy_data[7] if strategy_data and strategy_data[7] else "" 
         s_buy_base = strategy_data[2] if strategy_data else 0.0
         s_buy_drop = strategy_data[3] if strategy_data else 0.0
         s_sell_base = strategy_data[4] if strategy_data else 0.0
@@ -362,13 +364,23 @@ if choice == "📈 策略复盘":
         # 平均涨跌幅 (强制显示)
         r3c3.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
         r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
-        if saved_logic:
-            st.markdown(f"""
-            <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-                <h4 style="margin-top:0; color:#00C49F; font-size:1.2em; font-weight:bold; margin-bottom:10px;">🧠 当前交易逻辑</h4>
-                <div style="white-space: pre-wrap; font-size: 1.1em; color:#FFFFFF; font-weight: 500; line-height: 1.6;">{saved_logic}</div>
-            </div>
-            """, unsafe_allow_html=True)
+        # --- 左右并排逻辑展示 ---
+        if saved_buy_logic or saved_sell_logic:
+            lc1, lc2 = st.columns(2)
+            if saved_buy_logic:
+                lc1.markdown(f"""
+                <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                    <h4 style="margin-top:0; color:#00C49F; font-size:1.1em; font-weight:bold; margin-bottom:10px;">🟢 买入原则</h4>
+                    <div style="white-space: pre-wrap; font-size: 1.0em; color:#FFFFFF; font-weight: 500; line-height: 1.5;">{saved_buy_logic}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            if saved_sell_logic:
+                lc2.markdown(f"""
+                <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #FF4B4B; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                    <h4 style="margin-top:0; color:#FF4B4B; font-size:1.1em; font-weight:bold; margin-bottom:10px;">🔴 卖出原则</h4>
+                    <div style="white-space: pre-wrap; font-size: 1.0em; color:#FFFFFF; font-weight: 500; line-height: 1.5;">{saved_sell_logic}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
         st.divider()
 
@@ -378,7 +390,10 @@ if choice == "📈 策略复盘":
         with col_left:
             st.subheader("🧠 交易逻辑与参数设置")
             with st.form("strategy_form"):
-                new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
+                st.write("**📝 交易逻辑 (买卖原则)**")
+                fc1, fc2 = st.columns(2)
+                new_buy_logic = fc1.text_area("🟢 买入原则", value=saved_buy_logic, height=150)
+                new_sell_logic = fc2.text_area("🔴 卖出原则", value=saved_sell_logic, height=150)
                 new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
                 
                 st.write("---")
@@ -395,15 +410,14 @@ if choice == "📈 策略复盘":
                 if st.form_submit_button("💾 保存所有设置"):
                     c.execute("""
                         INSERT OR REPLACE INTO strategy_notes 
-                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
-                        VALUES (?,?,?,?,?,?,?,?)
-                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
+                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct, buy_logic, sell_logic) 
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (selected_stock, saved_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise, new_buy_logic, new_sell_logic))
                     conn.commit()
                     st.success("已保存")
                     st.rerun()
             
-            if saved_logic:
-                st.info(f"**当前逻辑存档：**\n\n{saved_logic}")
+
 
         with col_right:
             st.subheader("📜 决策历史记录")
