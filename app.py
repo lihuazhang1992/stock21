@@ -750,7 +750,15 @@ elif choice == "🎯 价格目标管理":
 
     # ========== 数据库表结构升级 ==========
     def ensure_price_target_v2_table():
-        c.execute("CREATE TABLE IF NOT EXISTS price_targets_v2 (code TEXT PRIMARY KEY, buy_high_point REAL, buy_drop_pct REAL, buy_break_status TEXT DEFAULT '未突破', buy_low_after_break REAL, sell_low_point REAL, sell_rise_pct REAL, sell_break_status TEXT DEFAULT '未突破', sell_high_after_break REAL, last_updated TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS price_targets_v2 (code TEXT PRIMARY KEY, buy_high_point REAL, buy_drop_pct REAL, buy_break_status TEXT DEFAULT '未突破', buy_low_after_break REAL, buy_rebound_pct REAL DEFAULT 0.0, sell_low_point REAL, sell_rise_pct REAL, sell_break_status TEXT DEFAULT '未突破', sell_high_after_break REAL, sell_fallback_pct REAL DEFAULT 0.0, last_updated TEXT)")
+        try:
+            c.execute("ALTER TABLE price_targets_v2 ADD COLUMN buy_rebound_pct REAL DEFAULT 0.0")
+        except:
+            pass
+        try:
+            c.execute("ALTER TABLE price_targets_v2 ADD COLUMN sell_fallback_pct REAL DEFAULT 0.0")
+        except:
+            pass
         conn.commit()
 
     ensure_price_target_v2_table()
@@ -761,9 +769,9 @@ elif choice == "🎯 价格目标管理":
         return float(result[0]) if result and result[0] else 0.0
 
     def save_price_target_v2(code, data):
-        c.execute("INSERT OR REPLACE INTO price_targets_v2 (code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, sell_low_point, sell_rise_pct, sell_break_status, sell_high_after_break, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (code, data.get('buy_high_point'), data.get('buy_drop_pct'), data.get('buy_break_status', '未突破'), data.get('buy_low_after_break'),
-             data.get('sell_low_point'), data.get('sell_rise_pct'), data.get('sell_break_status', '未突破'), data.get('sell_high_after_break'),
+        c.execute("INSERT OR REPLACE INTO price_targets_v2 (code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, buy_rebound_pct, sell_low_point, sell_rise_pct, sell_break_status, sell_high_after_break, sell_fallback_pct, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (code, data.get('buy_high_point'), data.get('buy_drop_pct'), data.get('buy_break_status', '未突破'), data.get('buy_low_after_break'), data.get('buy_rebound_pct'),
+             data.get('sell_low_point'), data.get('sell_rise_pct'), data.get('sell_break_status', '未突破'), data.get('sell_high_after_break'), data.get('sell_fallback_pct'),
              datetime.now().strftime('%Y-%m-%d %H:%M')))
         conn.commit()
         thread = threading.Thread(target=sync_db_to_github, daemon=True)
@@ -772,8 +780,23 @@ elif choice == "🎯 价格目标管理":
     def load_price_target_v2(code):
         row = c.execute('SELECT * FROM price_targets_v2 WHERE code = ?', (code,)).fetchone()
         if row:
-            return {'code': row[0], 'buy_high_point': row[1], 'buy_drop_pct': row[2], 'buy_break_status': row[3] or '未突破', 'buy_low_after_break': row[4],
-                    'sell_low_point': row[5], 'sell_rise_pct': row[6], 'sell_break_status': row[7] or '未突破', 'sell_high_after_break': row[8]}
+            # 兼容旧表结构，根据列数或字段名动态处理（这里直接按最新结构读取）
+            # 最新结构: code(0), buy_high(1), buy_drop(2), buy_break(3), buy_low(4), buy_rebound(5), sell_low(6), sell_rise(7), sell_break(8), sell_high(9), sell_fallback(10), updated(11)
+            # 这里的索引需要根据数据库实际列序调整，或者用 fetchall 返回的 description
+            d = dict(zip([col[0] for col in c.description], row))
+            return {
+                'code': d.get('code'),
+                'buy_high_point': d.get('buy_high_point'),
+                'buy_drop_pct': d.get('buy_drop_pct'),
+                'buy_break_status': d.get('buy_break_status', '未突破'),
+                'buy_low_after_break': d.get('buy_low_after_break'),
+                'buy_rebound_pct': d.get('buy_rebound_pct', 0.0),
+                'sell_low_point': d.get('sell_low_point'),
+                'sell_rise_pct': d.get('sell_rise_pct'),
+                'sell_break_status': d.get('sell_break_status', '未突破'),
+                'sell_high_after_break': d.get('sell_high_after_break'),
+                'sell_fallback_pct': d.get('sell_fallback_pct', 0.0)
+            }
         return None
 
     def delete_price_target_v2(code):
@@ -792,10 +815,10 @@ elif choice == "🎯 价格目标管理":
         result['base_price'] = round(high_point * (1 - drop_pct / 100), 3)
         if config.get('buy_break_status') == '已突破':
             low_after_break = config.get('buy_low_after_break')
+            rebound_pct_manual = config.get('buy_rebound_pct', 0.0)
             if low_after_break:
-                result['cycle_drop'] = round(high_point - low_after_break, 3)
-                result['buy_target'] = round(low_after_break + result['cycle_drop'] * 0.382, 3)
-                result['rebound_pct'] = round((result['buy_target'] - low_after_break) / low_after_break * 100, 2)
+                result['buy_target'] = round(low_after_break * (1 + rebound_pct_manual / 100), 3)
+                result['rebound_pct'] = rebound_pct_manual
                 if current_price > 0 and result['buy_target']:
                     result['to_target_pct'] = round((result['buy_target'] - current_price) / current_price * 100, 2)
         return result
@@ -809,24 +832,37 @@ elif choice == "🎯 价格目标管理":
         result['base_price'] = round(low_point * (1 + rise_pct / 100), 3)
         if config.get('sell_break_status') == '已突破':
             high_after_break = config.get('sell_high_after_break')
+            fallback_pct_manual = config.get('sell_fallback_pct', 0.0)
             if high_after_break:
-                result['cycle_rise'] = round(high_after_break - low_point, 3)
-                result['sell_target'] = round(high_after_break - result['cycle_rise'] * 0.618, 3)
-                result['fallback_pct'] = round((high_after_break - result['sell_target']) / high_after_break * 100, 2)
+                result['sell_target'] = round(high_after_break * (1 - fallback_pct_manual / 100), 3)
+                result['fallback_pct'] = fallback_pct_manual
                 if current_price > 0 and result['sell_target']:
                     result['to_target_pct'] = round((current_price - result['sell_target']) / result['sell_target'] * 100, 2)
         return result
 
     # ========== 获取所有监控数据 ==========
     all_stocks = get_dynamic_stock_list()
-    all_configs = c.execute("SELECT * FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL").fetchall()
-
+    all_configs_raw = c.execute("SELECT * FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL").fetchall()
+    
     # 构建监控列表数据
     monitor_items = []
-    for row in all_configs:
-        code = row[0]
-        buy_config = {'buy_high_point': row[1], 'buy_drop_pct': row[2], 'buy_break_status': row[3], 'buy_low_after_break': row[4]}
-        sell_config = {'sell_low_point': row[5], 'sell_rise_pct': row[6], 'sell_break_status': row[7], 'sell_high_after_break': row[8]}
+    for row in all_configs_raw:
+        d = dict(zip([col[0] for col in c.description], row))
+        code = d.get('code')
+        buy_config = {
+            'buy_high_point': d.get('buy_high_point'),
+            'buy_drop_pct': d.get('buy_drop_pct'),
+            'buy_break_status': d.get('buy_break_status'),
+            'buy_low_after_break': d.get('buy_low_after_break'),
+            'buy_rebound_pct': d.get('buy_rebound_pct', 0.0)
+        }
+        sell_config = {
+            'sell_low_point': d.get('sell_low_point'),
+            'sell_rise_pct': d.get('sell_rise_pct'),
+            'sell_break_status': d.get('sell_break_status'),
+            'sell_high_after_break': d.get('sell_high_after_break'),
+            'sell_fallback_pct': d.get('sell_fallback_pct', 0.0)
+        }
         curr_price = get_current_price(code)
 
         # 买入体系
@@ -941,7 +977,7 @@ elif choice == "🎯 价格目标管理":
 
         if selected_stock:
             current_price = get_current_price(selected_stock)
-            existing_config = load_price_target_v2(selected_stock) or {'buy_high_point': None, 'buy_drop_pct': None, 'buy_break_status': '未突破', 'buy_low_after_break': None, 'sell_low_point': None, 'sell_rise_pct': None, 'sell_break_status': '未突破', 'sell_high_after_break': None}
+            existing_config = load_price_target_v2(selected_stock) or {'buy_high_point': None, 'buy_drop_pct': None, 'buy_break_status': '未突破', 'buy_low_after_break': None, 'buy_rebound_pct': 0.0, 'sell_low_point': None, 'sell_rise_pct': None, 'sell_break_status': '未突破', 'sell_high_after_break': None, 'sell_fallback_pct': 0.0}
 
             st.markdown(f"**当前股票:** `{selected_stock}`　　**当前价格:** `{current_price:.3f}" if current_price > 0 else "未设置" + "`")
 
@@ -955,8 +991,11 @@ elif choice == "🎯 价格目标管理":
                     buy_drop = st.number_input("下跌幅度 (%)", value=float(existing_config['buy_drop_pct']) if existing_config.get('buy_drop_pct') else None, step=0.1, format="%.2f", key="buy_drop_pct")
                     buy_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('buy_break_status') != '已突破' else 1, key="buy_break_status")
                     buy_low_after = None
+                    buy_rebound = 0.0
                     if buy_break == "已突破":
-                        buy_low_after = st.number_input("突破后最低价", value=float(existing_config['buy_low_after_break']) if existing_config.get('buy_low_after_break') else None, step=0.001, format="%.3f", key="buy_low_after_break")
+                        c1, c2 = st.columns(2)
+                        buy_low_after = c1.number_input("突破后最低价", value=float(existing_config['buy_low_after_break']) if existing_config.get('buy_low_after_break') else None, step=0.001, format="%.3f", key="buy_low_after_break")
+                        buy_rebound = c2.number_input("反弹幅度 (%)", value=float(existing_config.get('buy_rebound_pct', 0.0)), step=0.1, format="%.2f", key="buy_rebound_pct_input")
 
             # 卖出体系配置
             with col_sell:
@@ -966,14 +1005,17 @@ elif choice == "🎯 价格目标管理":
                     sell_rise = st.number_input("上涨幅度 (%)", value=float(existing_config['sell_rise_pct']) if existing_config.get('sell_rise_pct') else None, step=0.1, format="%.2f", key="sell_rise_pct")
                     sell_break = st.selectbox("突破基准价状态", options=["未突破", "已突破"], index=0 if existing_config.get('sell_break_status') != '已突破' else 1, key="sell_break_status")
                     sell_high_after = None
+                    sell_fallback = 0.0
                     if sell_break == "已突破":
-                        sell_high_after = st.number_input("突破后最高价", value=float(existing_config['sell_high_after_break']) if existing_config.get('sell_high_after_break') else None, step=0.001, format="%.3f", key="sell_high_after_break")
+                        c1, c2 = st.columns(2)
+                        sell_high_after = c1.number_input("突破后最高价", value=float(existing_config['sell_high_after_break']) if existing_config.get('sell_high_after_break') else None, step=0.001, format="%.3f", key="sell_high_after_break")
+                        sell_fallback = c2.number_input("回落幅度 (%)", value=float(existing_config.get('sell_fallback_pct', 0.0)), step=0.1, format="%.2f", key="sell_fallback_pct_input")
 
             # 保存按钮
             col_save, col_delete = st.columns([1, 1])
             with col_save:
                 if st.button("💾 保存配置", type="primary"):
-                    config_data = {'buy_high_point': buy_high, 'buy_drop_pct': buy_drop, 'buy_break_status': buy_break, 'buy_low_after_break': buy_low_after, 'sell_low_point': sell_low, 'sell_rise_pct': sell_rise, 'sell_break_status': sell_break, 'sell_high_after_break': sell_high_after}
+                    config_data = {'buy_high_point': buy_high, 'buy_drop_pct': buy_drop, 'buy_break_status': buy_break, 'buy_low_after_break': buy_low_after, 'buy_rebound_pct': buy_rebound, 'sell_low_point': sell_low, 'sell_rise_pct': sell_rise, 'sell_break_status': sell_break, 'sell_high_after_break': sell_high_after, 'sell_fallback_pct': sell_fallback}
                     save_price_target_v2(selected_stock, config_data)
                     st.success("✅ 配置已保存")
                     st.rerun()
@@ -990,20 +1032,21 @@ elif choice == "🎯 价格目标管理":
     # ========== 3. 详细数据窗口（普通表格）==========
     st.subheader("📋 监控参数详情")
 
-    if all_configs:
+    if all_configs_raw:
         detail_data = []
-        for row in all_configs:
-            code, b_high, b_drop, b_break, b_low, s_low, s_rise, s_break, s_high, _ = row
+        for row in all_configs_raw:
+            d = dict(zip([col[0] for col in c.description], row))
+            code = d.get('code')
             curr_p = get_current_price(code)
 
             # 买入体系详情
+            b_high, b_drop, b_break, b_low, b_rebound = d.get('buy_high_point'), d.get('buy_drop_pct'), d.get('buy_break_status'), d.get('buy_low_after_break'), d.get('buy_rebound_pct', 0.0)
             if b_high and b_drop:
                 buy_base = round(b_high * (1 - b_drop / 100), 3)
-                rebound_pct = '-'
+                rebound_display = '-'
                 if b_break == '已突破' and b_low:
-                    cycle_drop = round(b_high - b_low, 3)
-                    buy_target = round(b_low + cycle_drop * 0.382, 3)
-                    rebound_pct = round((buy_target - b_low) / b_low * 100, 2) if b_low > 0 else '-'
+                    buy_target = round(b_low * (1 + b_rebound / 100), 3)
+                    rebound_display = f"{b_rebound:.2f}%"
                     to_target = round((buy_target - curr_p) / curr_p * 100, 2) if curr_p > 0 else None
                 else:
                     buy_target = '-'
@@ -1015,18 +1058,18 @@ elif choice == "🎯 价格目标管理":
                     '突破后极值': b_low if b_low else '-', '目标价': buy_target,
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
-                    '反弹值': f"{rebound_pct:.2f}%" if rebound_pct != '-' else '-',
+                    '反弹值': rebound_display,
                     '回落值': '-'
                 })
 
             # 卖出体系详情
+            s_low, s_rise, s_break, s_high, s_fallback = d.get('sell_low_point'), d.get('sell_rise_pct'), d.get('sell_break_status'), d.get('sell_high_after_break'), d.get('sell_fallback_pct', 0.0)
             if s_low and s_rise:
                 sell_base = round(s_low * (1 + s_rise / 100), 3)
-                fallback_pct = '-'
+                fallback_display = '-'
                 if s_break == '已突破' and s_high:
-                    cycle_rise = round(s_high - s_low, 3)
-                    sell_target = round(s_high - cycle_rise * 0.618, 3)
-                    fallback_pct = round((s_high - sell_target) / s_high * 100, 2) if s_high > 0 else '-'
+                    sell_target = round(s_high * (1 - s_fallback / 100), 3)
+                    fallback_display = f"{s_fallback:.2f}%"
                     to_target = round((curr_p - sell_target) / sell_target * 100, 2) if curr_p > 0 else None
                 else:
                     sell_target = '-'
@@ -1039,7 +1082,7 @@ elif choice == "🎯 价格目标管理":
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
                     '反弹值': '-',
-                    '回落值': f"{fallback_pct:.2f}%" if fallback_pct != '-' else '-'
+                    '回落值': fallback_display
                 })
 
         if detail_data:
