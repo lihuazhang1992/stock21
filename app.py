@@ -1054,7 +1054,7 @@ elif choice == "🎯 价格目标管理":
 
                 detail_data.append({
                     '股票': code, '体系': '买入', '突破状态': b_break,
-                    '前期高点': b_high, '下跌幅度': f"{b_drop:.2f}%", '基准价': buy_base,
+                    '前期高点': b_high, '前期低点': '-', '下跌幅度': f"{b_drop:.2f}%", '上涨幅度': '-', '基准价': buy_base,
                     '突破后极值': b_low if b_low else '-', '目标价': buy_target,
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
@@ -1077,7 +1077,7 @@ elif choice == "🎯 价格目标管理":
 
                 detail_data.append({
                     '股票': code, '体系': '卖出', '突破状态': s_break,
-                    '前期低点': s_low, '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
+                    '前期高点': '-', '前期低点': s_low, '下跌幅度': '-', '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
                     '突破后极值': s_high if s_high else '-', '目标价': sell_target,
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
@@ -1089,10 +1089,24 @@ elif choice == "🎯 价格目标管理":
             # 美化成HTML表格
             html = '<table class="custom-table"><thead><tr><th>股票</th><th>体系</th><th>突破状态</th><th>前期极值</th><th>幅度(%)</th><th>基准价</th><th>突破后极值</th><th>目标价</th><th>当前价</th><th>距离目标(%)</th><th>反弹值(%)</th><th>回落值(%)</th></tr></thead><tbody>'
             for item in detail_data:
-                # 根据体系调整列显示（前期极值和幅度根据体系不同）
-                pre_extreme = item['前期高点'] if item['体系'] == '买入' else item['前期低点']
-                amplitude = item['下跌幅度'] if item['体系'] == '买入' else item['上涨幅度']
-                html += f"<tr><td>{item['股票']}</td><td>{item['体系']}</td><td>{item['突破状态']}</td><td>{pre_extreme}</td><td>{amplitude}</td><td>{item['基准价']}</td><td>{item['突破后极值']}</td><td>{item['目标价']}</td><td>{item['当前价']}</td><td>{item['距离目标']}</td><td>{item['反弹值']}</td><td>{item['回落值']}</td></tr>"
+                # 动态获取前期极值和幅度
+                pre_extreme = item.get('前期高点') if item.get('体系') == '买入' else item.get('前期低点')
+                amplitude = item.get('下跌幅度') if item.get('体系') == '买入' else item.get('上涨幅度')
+                
+                html += f"""<tr>
+                    <td>{item.get('股票', '-')}</td>
+                    <td>{item.get('体系', '-')}</td>
+                    <td>{item.get('突破状态', '-')}</td>
+                    <td>{pre_extreme}</td>
+                    <td>{amplitude}</td>
+                    <td>{item.get('基准价', '-')}</td>
+                    <td>{item.get('突破后极值', '-')}</td>
+                    <td>{item.get('目标价', '-')}</td>
+                    <td>{item.get('当前价', '-')}</td>
+                    <td>{item.get('距离目标', '-')}</td>
+                    <td>{item.get('反弹值', '-')}</td>
+                    <td>{item.get('回落值', '-')}</td>
+                </tr>"""
             html += '</tbody></table>'
             st.markdown(html, unsafe_allow_html=True)
         else:
