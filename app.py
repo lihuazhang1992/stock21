@@ -842,27 +842,30 @@ elif choice == "🎯 价格目标管理":
 
     # ========== 获取所有监控数据 ==========
     all_stocks = get_dynamic_stock_list()
-    all_configs_raw = c.execute("SELECT * FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL").fetchall()
+    # 使用明确的列名查询，确保索引稳定
+    query = "SELECT code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, buy_rebound_pct, sell_low_point, sell_rise_pct, sell_break_status, sell_high_after_break, sell_fallback_pct FROM price_targets_v2 WHERE buy_high_point IS NOT NULL OR sell_low_point IS NOT NULL"
+    all_configs_raw = c.execute(query).fetchall()
     
     # 构建监控列表数据
     monitor_items = []
     for row in all_configs_raw:
-        d = dict(zip([col[0] for col in c.description], row))
-        code = d.get('code')
-        buy_config = {
-            'buy_high_point': d.get('buy_high_point'),
-            'buy_drop_pct': d.get('buy_drop_pct'),
-            'buy_break_status': d.get('buy_break_status'),
-            'buy_low_after_break': d.get('buy_low_after_break'),
-            'buy_rebound_pct': d.get('buy_rebound_pct', 0.0)
+        # 手动映射字段，防止 description 丢失或不一致
+        d = {
+            'code': row[0],
+            'buy_high_point': row[1],
+            'buy_drop_pct': row[2],
+            'buy_break_status': row[3],
+            'buy_low_after_break': row[4],
+            'buy_rebound_pct': row[5] or 0.0,
+            'sell_low_point': row[6],
+            'sell_rise_pct': row[7],
+            'sell_break_status': row[8],
+            'sell_high_after_break': row[9],
+            'sell_fallback_pct': row[10] or 0.0
         }
-        sell_config = {
-            'sell_low_point': d.get('sell_low_point'),
-            'sell_rise_pct': d.get('sell_rise_pct'),
-            'sell_break_status': d.get('sell_break_status'),
-            'sell_high_after_break': d.get('sell_high_after_break'),
-            'sell_fallback_pct': d.get('sell_fallback_pct', 0.0)
-        }
+        code = d['code']
+        buy_config = d
+        sell_config = d
         curr_price = get_current_price(code)
 
         # 买入体系
@@ -1035,12 +1038,25 @@ elif choice == "🎯 价格目标管理":
     if all_configs_raw:
         detail_data = []
         for row in all_configs_raw:
-            d = dict(zip([col[0] for col in c.description], row))
-            code = d.get('code')
+            # 同样手动映射字段
+            d = {
+                'code': row[0],
+                'buy_high_point': row[1],
+                'buy_drop_pct': row[2],
+                'buy_break_status': row[3],
+                'buy_low_after_break': row[4],
+                'buy_rebound_pct': row[5] or 0.0,
+                'sell_low_point': row[6],
+                'sell_rise_pct': row[7],
+                'sell_break_status': row[8],
+                'sell_high_after_break': row[9],
+                'sell_fallback_pct': row[10] or 0.0
+            }
+            code = d['code']
             curr_p = get_current_price(code)
 
             # 买入体系详情
-            b_high, b_drop, b_break, b_low, b_rebound = d.get('buy_high_point'), d.get('buy_drop_pct'), d.get('buy_break_status'), d.get('buy_low_after_break'), d.get('buy_rebound_pct', 0.0)
+            b_high, b_drop, b_break, b_low, b_rebound = d['buy_high_point'], d['buy_drop_pct'], d['buy_break_status'], d['buy_low_after_break'], d['buy_rebound_pct']
             if b_high and b_drop:
                 buy_base = round(b_high * (1 - b_drop / 100), 3)
                 rebound_display = '-'
@@ -1054,7 +1070,7 @@ elif choice == "🎯 价格目标管理":
 
                 detail_data.append({
                     '股票': code, '体系': '买入', '突破状态': b_break,
-                    '前期高点': b_high, '前期低点': '-', '下跌幅度': f"{b_drop:.2f}%", '上涨幅度': '-', '基准价': buy_base,
+                    '前期极值': b_high, '幅度': f"{b_drop:.2f}%", '基准价': buy_base,
                     '突破后极值': b_low if b_low else '-', '目标价': buy_target,
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
@@ -1063,7 +1079,7 @@ elif choice == "🎯 价格目标管理":
                 })
 
             # 卖出体系详情
-            s_low, s_rise, s_break, s_high, s_fallback = d.get('sell_low_point'), d.get('sell_rise_pct'), d.get('sell_break_status'), d.get('sell_high_after_break'), d.get('sell_fallback_pct', 0.0)
+            s_low, s_rise, s_break, s_high, s_fallback = d['sell_low_point'], d['sell_rise_pct'], d['sell_break_status'], d['sell_high_after_break'], d['sell_fallback_pct']
             if s_low and s_rise:
                 sell_base = round(s_low * (1 + s_rise / 100), 3)
                 fallback_display = '-'
@@ -1077,7 +1093,7 @@ elif choice == "🎯 价格目标管理":
 
                 detail_data.append({
                     '股票': code, '体系': '卖出', '突破状态': s_break,
-                    '前期高点': '-', '前期低点': s_low, '下跌幅度': '-', '上涨幅度': f"{s_rise:.2f}%", '基准价': sell_base,
+                    '前期极值': s_low, '幅度': f"{s_rise:.2f}%", '基准价': sell_base,
                     '突破后极值': s_high if s_high else '-', '目标价': sell_target,
                     '当前价': curr_p if curr_p > 0 else '-',
                     '距离目标': f"{to_target:.2f}%" if to_target is not None else '-',
@@ -1089,16 +1105,12 @@ elif choice == "🎯 价格目标管理":
             # 美化成HTML表格
             html = '<table class="custom-table"><thead><tr><th>股票</th><th>体系</th><th>突破状态</th><th>前期极值</th><th>幅度(%)</th><th>基准价</th><th>突破后极值</th><th>目标价</th><th>当前价</th><th>距离目标(%)</th><th>反弹值(%)</th><th>回落值(%)</th></tr></thead><tbody>'
             for item in detail_data:
-                # 动态获取前期极值和幅度
-                pre_extreme = item.get('前期高点') if item.get('体系') == '买入' else item.get('前期低点')
-                amplitude = item.get('下跌幅度') if item.get('体系') == '买入' else item.get('上涨幅度')
-                
                 html += f"""<tr>
                     <td>{item.get('股票', '-')}</td>
                     <td>{item.get('体系', '-')}</td>
                     <td>{item.get('突破状态', '-')}</td>
-                    <td>{pre_extreme}</td>
-                    <td>{amplitude}</td>
+                    <td>{item.get('前期极值', '-')}</td>
+                    <td>{item.get('幅度', '-')}</td>
                     <td>{item.get('基准价', '-')}</td>
                     <td>{item.get('突破后极值', '-')}</td>
                     <td>{item.get('目标价', '-')}</td>
