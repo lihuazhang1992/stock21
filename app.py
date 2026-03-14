@@ -430,14 +430,13 @@ if choice == "📈 策略复盘":
 
         # --- 2. 用 HTML 紧凑卡片网格展示（3行×4列，无多余列间距）---
         pnl_color = "#d32f2f" if holding_profit_amount >= 0 else "#388e3c"
-        pnl_sign  = "+" if holding_profit_amount >= 0 else ""
+        pnl_str   = f"+{holding_profit_amount:,.2f}" if holding_profit_amount >= 0 else f"{holding_profit_amount:,.2f}"
+        pnl_pct   = f"+{holding_profit_pct:.2f}%" if holding_profit_pct >= 0 else f"{holding_profit_pct:.2f}%"
         rp_color  = "#d32f2f" if realized_profit >= 0 else "#388e3c"
-        rp_sign   = "+" if realized_profit >= 0 else ""
+        rp_str    = f"+{realized_profit:,.2f}" if realized_profit >= 0 else f"{realized_profit:,.2f}"
 
-        b_label = ("🔴 买入监控 <small style='color:#ff6b6b'>(达标)</small>" if is_buy_triggered
-                   else "📥 买入监控 <small style='opacity:0.6'>(观察)</small>")
-        s_label = ("🔴 卖出监控 <small style='color:#ff6b6b'>(达标)</small>" if is_sell_triggered
-                   else "📤 卖出监控 <small style='opacity:0.6'>(观察)</small>")
+        b_label = ("🔴 买入监控（达标）" if is_buy_triggered else "📥 买入监控（观察）")
+        s_label = ("🔴 卖出监控（达标）" if is_sell_triggered else "📤 卖出监控（观察）")
 
         buy_val  = f"{buy_monitor_p:.3f}"  if s_buy_base  > 0 else "未设置"
         sell_val = f"{sell_monitor_p:.3f}" if s_sell_base > 0 else "未设置"
@@ -499,12 +498,12 @@ if choice == "📈 策略复盘":
 
           <div class="mc-card">
             <div class="mc-label">持仓盈亏额</div>
-            <div class="mc-value" style="color:{pnl_color}">{pnl_sign}{holding_profit_amount:,.2f}</div>
-            <div class="mc-sub" style="color:{pnl_color}">{pnl_sign}{holding_profit_pct:.2f}%</div>
+            <div class="mc-value" style="color:{pnl_color}">{pnl_str}</div>
+            <div class="mc-sub" style="color:{pnl_color}">{pnl_pct}</div>
           </div>
           <div class="mc-card">
             <div class="mc-label">已实现利润</div>
-            <div class="mc-value" style="color:{rp_color}">{rp_sign}{realized_profit:,.2f}</div>
+            <div class="mc-value" style="color:{rp_color}">{rp_str}</div>
           </div>
           <div class="mc-card">
             <div class="mc-label">最高占用金额</div>
@@ -517,11 +516,11 @@ if choice == "📈 策略复盘":
 
           <div class="mc-card">
             <div class="mc-label">{b_label}</div>
-            <div class="mc-value">{ buy_val }</div>
+            <div class="mc-value">{buy_val}</div>
           </div>
           <div class="mc-card">
             <div class="mc-label">{s_label}</div>
-            <div class="mc-value">{ sell_val }</div>
+            <div class="mc-value">{sell_val}</div>
           </div>
           <div class="mc-card">
             <div class="mc-label">📤 卖出上涨比例</div>
