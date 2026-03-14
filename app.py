@@ -198,7 +198,7 @@ def get_dynamic_stock_list():
     except:
         return ["汇丰控股", "中芯国际", "比亚迪"]
 
-# 注入 CSS 样式
+# 注入 CSS 样式 + 一键回到顶部按钮 + 冻结选股下拉框
 st.markdown("""
     <style>
     .custom-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
@@ -207,7 +207,59 @@ st.markdown("""
     .custom-table tbody tr:nth-of-type(even) { background-color: #f8f8f8; }
     .profit-red { color: #d32f2f; font-weight: bold; }
     .loss-green { color: #388e3c; font-weight: bold; }
+
+    /* 一键回到顶部按钮 */
+    #back-to-top-btn {
+        position: fixed;
+        bottom: 36px;
+        right: 36px;
+        z-index: 99999;
+        background: linear-gradient(135deg, #009879, #00c49f);
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 52px;
+        height: 52px;
+        font-size: 22px;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0,150,120,0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: opacity 0.3s, transform 0.2s;
+        opacity: 0.88;
+    }
+    #back-to-top-btn:hover {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+
+    /* 冻结策略复盘选股下拉框 */
+    #stock-selector-sticky {
+        position: sticky;
+        top: 54px;
+        z-index: 999;
+        padding: 6px 0 4px 0;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        background: rgba(14,17,23,0.92);
+        border-radius: 8px;
+        margin-bottom: 4px;
+    }
     </style>
+
+    <!-- 回到顶部浮动按钮 -->
+    <button id="back-to-top-btn" title="回到顶部" onclick="
+        (function(){
+            var mainEl = window.parent.document.querySelector('section.main');
+            if (mainEl) { mainEl.scrollTo({top: 0, behavior: 'smooth'}); return; }
+            var candidates = window.parent.document.querySelectorAll('[data-testid=stAppViewContainer], .main, .block-container');
+            for (var el of candidates) {
+                if (el.scrollHeight > el.clientHeight) { el.scrollTo({top: 0, behavior: 'smooth'}); return; }
+            }
+            window.parent.scrollTo({top: 0, behavior: 'smooth'});
+        })();
+    ">⬆</button>
 """, unsafe_allow_html=True)
 
 # --- 2. 侧边栏导航 ---
@@ -226,8 +278,10 @@ if choice == "📈 策略复盘":
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
     manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
     
-    # 统一选择股票
+    # 统一选择股票（冻结定位：通过外层sticky容器固定）
+    st.markdown('<div id="stock-selector-sticky">', unsafe_allow_html=True)
     selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None)
+    st.markdown('</div>', unsafe_allow_html=True)
     
     if selected_stock:
         s_df = df_trades[df_trades['code'] == selected_stock].copy()
@@ -321,11 +375,6 @@ if choice == "📈 策略复盘":
         is_buy_triggered = (s_buy_base > 0 and now_p <= buy_monitor_p)
         is_sell_triggered = (s_sell_base > 0 and now_p >= sell_monitor_p)
         
-        # 获取涨跌周期平均值
-        cycles_data = pd.read_sql("SELECT change_pct FROM price_cycles WHERE code = ?", conn, params=(selected_stock,))
-        up_avg = cycles_data[cycles_data['change_pct'] > 0]['change_pct'].mean() if not cycles_data.empty else 0
-        down_avg = cycles_data[cycles_data['change_pct'] < 0]['change_pct'].mean() if not cycles_data.empty else 0
-
         # --- 2. 3行x4列 固定网格展示 ---
         # 第一行：持仓基础数据
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
@@ -359,9 +408,9 @@ if choice == "📈 策略复盘":
         else:
             r3c2.metric("📤 卖出监控", "未设置")
 
-        # 平均涨跌幅 (强制显示)
-        r3c3.metric("📈 平均涨幅", f"{up_avg:.2f}%" if not pd.isna(up_avg) else "0.00%")
-        r3c4.metric("📉 平均跌幅", f"{down_avg:.2f}%" if not pd.isna(down_avg) else "0.00%")
+        # 上涨比例与下跌比例 (来自监控设置)
+        r3c3.metric("📤 卖出上涨比例", f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置")
+        r3c4.metric("📥 买入下跌比例", f"{s_buy_drop:.2f}%" if s_buy_drop else "未设置")
         if saved_logic:
             st.markdown(f"""
             <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
@@ -372,100 +421,71 @@ if choice == "📈 策略复盘":
 
         st.divider()
 
-        # --- 第二区：交易逻辑与决策历史 ---
-        col_left, col_right = st.columns([1, 1])
+        # --- 第二区：交易逻辑与决策历史（Tab布局，减少滚动）---
+        tab_logic, tab_decision = st.tabs(["🧠 交易逻辑与参数设置", "📜 决策历史记录"])
         
-        with col_left:
-            st.subheader("🧠 交易逻辑与参数设置")
-            with st.form("strategy_form"):
-                new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=150)
-                new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
-                
-                st.write("---")
-                st.write("**📥 买入监控设置**")
-                col_b1, col_b2 = st.columns(2)
-                new_buy_base = col_b1.number_input("买入基准价", value=float(s_buy_base), step=0.01)
-                new_buy_drop = col_b2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
-                
-                st.write("**📤 卖出监控设置**")
-                col_s1, col_s2 = st.columns(2)
-                new_sell_base = col_s1.number_input("卖出基准价", value=float(s_sell_base), step=0.01)
-                new_sell_rise = col_s2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
-                
-                if st.form_submit_button("💾 保存所有设置"):
-                    c.execute("""
-                        INSERT OR REPLACE INTO strategy_notes 
-                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
-                        VALUES (?,?,?,?,?,?,?,?)
-                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
-                    conn.commit()
-                    st.success("已保存")
-                    st.rerun()
-            
-            if saved_logic:
-                st.info(f"**当前逻辑存档：**\n\n{saved_logic}")
-
-        with col_right:
-            st.subheader("📜 决策历史记录")
-            with st.expander("➕ 新增决策记录"):
-                with st.form("new_decision", clear_on_submit=True):
-                    d_date = st.date_input("日期", datetime.now())
-                    d_content = st.text_input("决策内容", placeholder="例如：减仓30%")
-                    d_reason = st.text_area("决策原因", placeholder="为什么做这个决策？")
-                    if st.form_submit_button("记录决策"):
-                        c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)", 
-                                  (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
+        with tab_logic:
+            col_form, col_preview = st.columns([3, 2])
+            with col_form:
+                with st.form("strategy_form"):
+                    new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=120)
+                    new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
+                    
+                    st.write("---")
+                    c_buy1, c_buy2, c_sell1, c_sell2 = st.columns(4)
+                    new_buy_base = c_buy1.number_input("📥 买入基准价", value=float(s_buy_base), step=0.01)
+                    new_buy_drop = c_buy2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
+                    new_sell_base = c_sell1.number_input("📤 卖出基准价", value=float(s_sell_base), step=0.01)
+                    new_sell_rise = c_sell2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
+                    
+                    if st.form_submit_button("💾 保存所有设置", use_container_width=True):
+                        c.execute("""
+                            INSERT OR REPLACE INTO strategy_notes 
+                            (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
+                            VALUES (?,?,?,?,?,?,?,?)
+                        """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
                         conn.commit()
+                        st.success("已保存")
                         st.rerun()
-            
-            # 决策历史列表与删除
-            decisions = pd.read_sql("SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC", conn, params=(selected_stock,))
-            for _, row in decisions.iterrows():
-                with st.container(border=True):
-                    head_col, del_col = st.columns([9, 1])
-                    head_col.markdown(f"**{row['date']} | {row['decision']}**")
-                    if del_col.button("🗑️", key=f"del_dec_{row['id']}"):
-                        c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
-                        conn.commit()
-                        st.rerun()
-                    st.caption(row['reason'])
+            with col_preview:
+                if saved_logic:
+                    st.markdown(f"""
+                    <div style="background: rgba(0, 0, 0, 0.4); border-radius: 10px; padding: 16px; border-left: 6px solid #00C49F; height: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                        <h5 style="margin-top:0; color:#00C49F; margin-bottom:8px;">🧠 当前交易逻辑</h5>
+                        <div style="white-space: pre-wrap; font-size: 0.95em; color:#FFFFFF; line-height: 1.6;">{saved_logic}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("尚未设置交易逻辑")
 
-        st.divider()
+        with tab_decision:
+            add_col, list_col = st.columns([1, 2])
+            with add_col:
+                with st.expander("➕ 新增决策记录", expanded=True):
+                    with st.form("new_decision", clear_on_submit=True):
+                        d_date = st.date_input("日期", datetime.now())
+                        d_content = st.text_input("决策内容", placeholder="例如：减仓30%")
+                        d_reason = st.text_area("决策原因", placeholder="为什么做这个决策？", height=80)
+                        if st.form_submit_button("记录决策", use_container_width=True):
+                            c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)", 
+                                      (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
+                            conn.commit()
+                            st.rerun()
+            with list_col:
+                decisions = pd.read_sql("SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC", conn, params=(selected_stock,))
+                if decisions.empty:
+                    st.info("暂无决策记录")
+                else:
+                    for _, row in decisions.iterrows():
+                        with st.container(border=True):
+                            head_col, del_col = st.columns([9, 1])
+                            head_col.markdown(f"**{row['date']} | {row['decision']}**")
+                            if del_col.button("🗑️", key=f"del_dec_{row['id']}"):
+                                c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
+                                conn.commit()
+                                st.rerun()
+                            st.caption(row['reason'])
 
-        # --- 第三区：涨跌周期管理 ---
-        st.subheader("📉 历史涨跌周期统计")
-        cycle_input, cycle_list = st.columns([1, 2])
-        
-        with cycle_input:
-            with st.form("new_cycle", clear_on_submit=True):
-                st.write("**新增涨跌周期**")
-                cy_start = st.date_input("开始日期")
-                cy_end = st.date_input("结束日期")
-                cy_pct = st.number_input("涨跌幅 (%)", step=0.01)
-                if st.form_submit_button("添加周期"):
-                    c.execute("INSERT INTO price_cycles (code, start_date, end_date, change_pct) VALUES (?,?,?,?)", 
-                              (selected_stock, cy_start.strftime('%Y-%m-%d'), cy_end.strftime('%Y-%m-%d'), cy_pct))
-                    conn.commit()
-                    st.rerun()
-        
-        with cycle_list:
-            cycles = pd.read_sql("SELECT id, start_date, end_date, change_pct FROM price_cycles WHERE code = ? ORDER BY start_date DESC", conn, params=(selected_stock,))
-            if not cycles.empty:
-                up_avg = cycles[cycles['change_pct'] > 0]['change_pct'].mean()
-                down_avg = cycles[cycles['change_pct'] < 0]['change_pct'].mean()
-                st.markdown(f"📈 **平均涨幅:** `{up_avg:.2f}%` | 📉 **平均跌幅:** `{down_avg:.2f}%`")
-                
-                # 周期表格展示
-                for _, row in cycles.iterrows():
-                    c_col, d_col = st.columns([8, 2])
-                    color = "#d32f2f" if row['change_pct'] > 0 else "#388e3c"
-                    c_col.markdown(f"`{row['start_date']} → {row['end_date']}` <span style='color:{color}; font-weight:bold;'>({row['change_pct']:+.2f}%)</span>", unsafe_allow_html=True)
-                    if d_col.button("删除", key=f"del_cyc_{row['id']}"):
-                        c.execute("DELETE FROM price_cycles WHERE id = ?", (row['id'],))
-                        conn.commit()
-                        st.rerun()
-            else:
-                st.info("暂无涨跌周期记录")
     else:
         st.info("请先在交易录入中添加股票数据")
 
