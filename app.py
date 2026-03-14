@@ -231,17 +231,18 @@ st.markdown("""
         grid-template-columns: repeat(4, 1fr);
         gap: 8px;
         margin: 4px 0 12px 0;
+        width: 100%;
     }
     .mc-card {
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.10);
+        background: #f0f2f6;
+        border: 1px solid #d0d3da;
         border-radius: 8px;
         padding: 10px 12px 8px 12px;
         min-width: 0;
     }
     .mc-label {
         font-size: 0.75em;
-        color: rgba(255,255,255,0.55);
+        color: #666;
         margin-bottom: 4px;
         white-space: nowrap;
         overflow: hidden;
@@ -250,12 +251,13 @@ st.markdown("""
     .mc-value {
         font-size: 1.18em;
         font-weight: 600;
-        color: #fff;
+        color: #111;
         white-space: nowrap;
     }
     .mc-sub {
         font-size: 0.78em;
         margin-top: 2px;
+        color: #333;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -461,10 +463,10 @@ if choice == "📈 策略复盘":
         is_sell_triggered = (s_sell_base > 0 and now_p >= sell_monitor_p)
 
         # --- 2. 用 HTML 紧凑卡片网格展示（3行×4列，无多余列间距）---
-        pnl_color = "#d32f2f" if holding_profit_amount >= 0 else "#388e3c"
+        pnl_color = "#c0392b" if holding_profit_amount >= 0 else "#27ae60"
         pnl_str   = f"+{holding_profit_amount:,.2f}" if holding_profit_amount >= 0 else f"{holding_profit_amount:,.2f}"
         pnl_pct   = f"+{holding_profit_pct:.2f}%" if holding_profit_pct >= 0 else f"{holding_profit_pct:.2f}%"
-        rp_color  = "#d32f2f" if realized_profit >= 0 else "#388e3c"
+        rp_color  = "#c0392b" if realized_profit >= 0 else "#27ae60"
         rp_str    = f"+{realized_profit:,.2f}" if realized_profit >= 0 else f"{realized_profit:,.2f}"
 
         b_label = ("🔴 买入监控（达标）" if is_buy_triggered else "📥 买入监控（观察）")
@@ -475,61 +477,62 @@ if choice == "📈 策略复盘":
         buy_drop_val  = f"{s_buy_drop:.2f}%"  if s_buy_drop  else "未设置"
         sell_rise_val = f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置"
 
-        st.markdown(f"""
+        card_html = f"""
+        <style>
+        .mc-grid {{
+            display: grid !important;
+            grid-template-columns: repeat(4, 1fr) !important;
+            gap: 8px;
+            margin: 4px 0 12px 0;
+            width: 100%;
+            font-family: sans-serif;
+        }}
+        .mc-card {{
+            background: #f0f2f6;
+            border: 1px solid #d0d3da;
+            border-radius: 8px;
+            padding: 10px 12px 8px 12px;
+            min-width: 0;
+            box-sizing: border-box;
+        }}
+        .mc-label {{
+            font-size: 0.73em;
+            color: #666;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .mc-value {{
+            font-size: 1.15em;
+            font-weight: 600;
+            color: #111;
+            white-space: nowrap;
+        }}
+        .mc-sub {{
+            font-size: 0.78em;
+            margin-top: 2px;
+            color: #333;
+        }}
+        </style>
         <div class="mc-grid">
-          <div class="mc-card">
-            <div class="mc-label">持仓数量</div>
-            <div class="mc-value">{net_q}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">持仓市值</div>
-            <div class="mc-value">{abs(net_q) * now_p:,.2f}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">成本价</div>
-            <div class="mc-value">{avg_cost:.3f}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">当前现价</div>
-            <div class="mc-value">{now_p:.3f}</div>
-          </div>
+          <div class="mc-card"><div class="mc-label">持仓数量</div><div class="mc-value">{net_q}</div></div>
+          <div class="mc-card"><div class="mc-label">持仓市值</div><div class="mc-value">{abs(net_q) * now_p:,.2f}</div></div>
+          <div class="mc-card"><div class="mc-label">成本价</div><div class="mc-value">{avg_cost:.3f}</div></div>
+          <div class="mc-card"><div class="mc-label">当前现价</div><div class="mc-value">{now_p:.3f}</div></div>
 
-          <div class="mc-card">
-            <div class="mc-label">持仓盈亏额</div>
-            <div class="mc-value" style="color:{pnl_color}">{pnl_str}</div>
-            <div class="mc-sub" style="color:{pnl_color}">{pnl_pct}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">已实现利润</div>
-            <div class="mc-value" style="color:{rp_color}">{rp_str}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">最高占用金额</div>
-            <div class="mc-value">{max_occupied_amount:,.2f}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">历史年化收益</div>
-            <div class="mc-value">{saved_annual:.2f}%</div>
-          </div>
+          <div class="mc-card"><div class="mc-label">持仓盈亏额</div><div class="mc-value" style="color:{pnl_color}">{pnl_str}</div><div class="mc-sub" style="color:{pnl_color}">{pnl_pct}</div></div>
+          <div class="mc-card"><div class="mc-label">已实现利润</div><div class="mc-value" style="color:{rp_color}">{rp_str}</div></div>
+          <div class="mc-card"><div class="mc-label">最高占用金额</div><div class="mc-value">{max_occupied_amount:,.2f}</div></div>
+          <div class="mc-card"><div class="mc-label">历史年化收益</div><div class="mc-value">{saved_annual:.2f}%</div></div>
 
-          <div class="mc-card">
-            <div class="mc-label">{b_label}</div>
-            <div class="mc-value">{buy_val}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">{s_label}</div>
-            <div class="mc-value">{sell_val}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">📤 卖出上涨比例</div>
-            <div class="mc-value">{sell_rise_val}</div>
-          </div>
-          <div class="mc-card">
-            <div class="mc-label">📥 买入下跌比例</div>
-            <div class="mc-value">{buy_drop_val}</div>
-          </div>
+          <div class="mc-card"><div class="mc-label">{b_label}</div><div class="mc-value">{buy_val}</div></div>
+          <div class="mc-card"><div class="mc-label">{s_label}</div><div class="mc-value">{sell_val}</div></div>
+          <div class="mc-card"><div class="mc-label">📤 卖出上涨比例</div><div class="mc-value">{sell_rise_val}</div></div>
+          <div class="mc-card"><div class="mc-label">📥 买入下跌比例</div><div class="mc-value">{buy_drop_val}</div></div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        components.html(card_html, height=175)
 
         st.divider()
 
