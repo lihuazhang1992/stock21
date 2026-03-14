@@ -2,6 +2,7 @@ from git import Repo
 import os, shutil, streamlit as st_git
 import pathlib
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import sqlite3
 import threading
@@ -198,7 +199,7 @@ def get_dynamic_stock_list():
     except:
         return ["汇丰控股", "中芯国际", "比亚迪"]
 
-# 注入 CSS 样式 + 一键回到顶部按钮 + 冻结选股下拉框
+# 注入全局 CSS 样式
 st.markdown("""
     <style>
     .custom-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
@@ -207,60 +208,96 @@ st.markdown("""
     .custom-table tbody tr:nth-of-type(even) { background-color: #f8f8f8; }
     .profit-red { color: #d32f2f; font-weight: bold; }
     .loss-green { color: #388e3c; font-weight: bold; }
-
-    /* 一键回到顶部按钮 */
-    #back-to-top-btn {
-        position: fixed;
-        bottom: 36px;
-        right: 36px;
-        z-index: 99999;
-        background: linear-gradient(135deg, #009879, #00c49f);
-        color: white;
-        border: none;
-        border-radius: 50%;
-        width: 52px;
-        height: 52px;
-        font-size: 22px;
-        cursor: pointer;
-        box-shadow: 0 4px 16px rgba(0,150,120,0.45);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: opacity 0.3s, transform 0.2s;
-        opacity: 0.88;
-    }
-    #back-to-top-btn:hover {
-        opacity: 1;
-        transform: scale(1.1);
-    }
-
-    /* 冻结策略复盘选股下拉框 */
-    #stock-selector-sticky {
-        position: sticky;
-        top: 54px;
-        z-index: 999;
-        padding: 6px 0 4px 0;
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        background: rgba(14,17,23,0.92);
-        border-radius: 8px;
-        margin-bottom: 4px;
-    }
     </style>
-
-    <!-- 回到顶部浮动按钮 -->
-    <button id="back-to-top-btn" title="回到顶部" onclick="
-        (function(){
-            var mainEl = window.parent.document.querySelector('section.main');
-            if (mainEl) { mainEl.scrollTo({top: 0, behavior: 'smooth'}); return; }
-            var candidates = window.parent.document.querySelectorAll('[data-testid=stAppViewContainer], .main, .block-container');
-            for (var el of candidates) {
-                if (el.scrollHeight > el.clientHeight) { el.scrollTo({top: 0, behavior: 'smooth'}); return; }
-            }
-            window.parent.scrollTo({top: 0, behavior: 'smooth'});
-        })();
-    ">⬆</button>
 """, unsafe_allow_html=True)
+
+# 注入"回到顶部"浮动按钮 + 选股下拉框 sticky 冻结
+# 使用 components.html 直接注入父frame，突破 iframe 同源限制
+components.html("""
+<script>
+(function() {
+    // ---- 1. 回到顶部浮动按钮 ----
+    var doc = window.parent.document;
+
+    // 防止重复注入
+    if (doc.getElementById('wb-back-to-top')) return;
+
+    var btn = doc.createElement('button');
+    btn.id = 'wb-back-to-top';
+    btn.innerHTML = '&#8679;';
+    btn.title = '回到顶部';
+    btn.style.cssText = [
+        'position:fixed', 'bottom:40px', 'right:40px', 'z-index:999999',
+        'width:52px', 'height:52px', 'border-radius:50%', 'border:none',
+        'background:linear-gradient(135deg,#009879,#00c49f)', 'color:#fff',
+        'font-size:26px', 'font-weight:bold', 'cursor:pointer',
+        'box-shadow:0 4px 16px rgba(0,150,120,0.5)',
+        'display:flex', 'align-items:center', 'justify-content:center',
+        'opacity:0.9', 'transition:opacity 0.2s,transform 0.2s',
+        'line-height:1'
+    ].join(';');
+    btn.onmouseenter = function(){ this.style.opacity='1'; this.style.transform='scale(1.12)'; };
+    btn.onmouseleave = function(){ this.style.opacity='0.9'; this.style.transform='scale(1)'; };
+    btn.onclick = function() {
+        // Streamlit 的可滚动容器是 section.main 下的第一个 overflow:auto 元素
+        var scrollEl = doc.querySelector('[data-testid="stAppViewBlockContainer"]')
+                    || doc.querySelector('.main .block-container')
+                    || doc.querySelector('section.main');
+        // 向上查找真正会滚动的祖先
+        function findScrollable(el) {
+            while (el && el !== doc.body) {
+                if (el.scrollTop > 0) return el;
+                el = el.parentElement;
+            }
+            return doc.documentElement;
+        }
+        var target = findScrollable(scrollEl) || doc.documentElement;
+        target.scrollTo({ top: 0, behavior: 'smooth' });
+        // 同时尝试 section.main
+        var main = doc.querySelector('section.main');
+        if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    doc.body.appendChild(btn);
+
+    // ---- 2. 选股下拉框 Sticky 冻结 ----
+    // 等待 Streamlit DOM 渲染完成后操作
+    function stickySelectbox() {
+        // 找到策略复盘页中 label 含"选择分析股票"的 selectbox 容器
+        var labels = doc.querySelectorAll('[data-testid="stSelectbox"] label');
+        for (var i = 0; i < labels.length; i++) {
+            if (labels[i].textContent.indexOf('选择分析股票') !== -1) {
+                var selectboxWrapper = labels[i].closest('[data-testid="stSelectbox"]');
+                if (selectboxWrapper) {
+                    var stickyTarget = selectboxWrapper.parentElement;
+                    if (stickyTarget) {
+                        stickyTarget.style.position = 'sticky';
+                        stickyTarget.style.top = '60px';
+                        stickyTarget.style.zIndex = '1000';
+                        stickyTarget.style.background = 'rgba(14,17,23,0.95)';
+                        stickyTarget.style.backdropFilter = 'blur(8px)';
+                        stickyTarget.style.borderRadius = '8px';
+                        stickyTarget.style.padding = '6px 4px';
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // 初次执行 + 每次 Streamlit rerun 后重新执行
+    setTimeout(stickySelectbox, 800);
+    setTimeout(stickySelectbox, 1500);
+    setTimeout(stickySelectbox, 3000);
+
+    // MutationObserver 监听 DOM 变化，自动重应用 sticky
+    var observer = new MutationObserver(function(mutations) {
+        clearTimeout(window.__stickyTimer);
+        window.__stickyTimer = setTimeout(stickySelectbox, 300);
+    });
+    observer.observe(doc.body, { childList: true, subtree: true });
+})();
+</script>
+""", height=0)
 
 # --- 2. 侧边栏导航 ---
 menu = ["📈 策略复盘", "📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
@@ -278,10 +315,8 @@ if choice == "📈 策略复盘":
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
     manual_costs = {k: v[1] for k, v in latest_prices_data.items()}
     
-    # 统一选择股票（冻结定位：通过外层sticky容器固定）
-    st.markdown('<div id="stock-selector-sticky">', unsafe_allow_html=True)
+    # 统一选择股票
     selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None)
-    st.markdown('</div>', unsafe_allow_html=True)
     
     if selected_stock:
         s_df = df_trades[df_trades['code'] == selected_stock].copy()
@@ -411,79 +446,66 @@ if choice == "📈 策略复盘":
         # 上涨比例与下跌比例 (来自监控设置)
         r3c3.metric("📤 卖出上涨比例", f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置")
         r3c4.metric("📥 买入下跌比例", f"{s_buy_drop:.2f}%" if s_buy_drop else "未设置")
-        if saved_logic:
-            st.markdown(f"""
-            <div style="background: rgba(0, 0, 0, 0.4); border-radius: 12px; padding: 20px; border-left: 8px solid #00C49F; margin-top: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-                <h4 style="margin-top:0; color:#00C49F; font-size:1.2em; font-weight:bold; margin-bottom:10px;">🧠 当前交易逻辑</h4>
-                <div style="white-space: pre-wrap; font-size: 1.1em; color:#FFFFFF; font-weight: 500; line-height: 1.6;">{saved_logic}</div>
-            </div>
-            """, unsafe_allow_html=True)
 
         st.divider()
 
-        # --- 第二区：交易逻辑与决策历史（Tab布局，减少滚动）---
-        tab_logic, tab_decision = st.tabs(["🧠 交易逻辑与参数设置", "📜 决策历史记录"])
-        
-        with tab_logic:
-            col_form, col_preview = st.columns([3, 2])
-            with col_form:
-                with st.form("strategy_form"):
-                    new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=120)
-                    new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
-                    
-                    st.write("---")
-                    c_buy1, c_buy2, c_sell1, c_sell2 = st.columns(4)
-                    new_buy_base = c_buy1.number_input("📥 买入基准价", value=float(s_buy_base), step=0.01)
-                    new_buy_drop = c_buy2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
-                    new_sell_base = c_sell1.number_input("📤 卖出基准价", value=float(s_sell_base), step=0.01)
-                    new_sell_rise = c_sell2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
-                    
-                    if st.form_submit_button("💾 保存所有设置", use_container_width=True):
-                        c.execute("""
-                            INSERT OR REPLACE INTO strategy_notes 
-                            (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
-                            VALUES (?,?,?,?,?,?,?,?)
-                        """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
-                        conn.commit()
-                        st.success("已保存")
-                        st.rerun()
-            with col_preview:
-                if saved_logic:
-                    st.markdown(f"""
-                    <div style="background: rgba(0, 0, 0, 0.4); border-radius: 10px; padding: 16px; border-left: 6px solid #00C49F; height: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-                        <h5 style="margin-top:0; color:#00C49F; margin-bottom:8px;">🧠 当前交易逻辑</h5>
-                        <div style="white-space: pre-wrap; font-size: 0.95em; color:#FFFFFF; line-height: 1.6;">{saved_logic}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.info("尚未设置交易逻辑")
+        # --- 第二区：左右两栏直接展示，无需Tab切换 ---
+        col_left, col_right = st.columns([3, 2])
 
-        with tab_decision:
-            add_col, list_col = st.columns([1, 2])
-            with add_col:
-                with st.expander("➕ 新增决策记录", expanded=True):
-                    with st.form("new_decision", clear_on_submit=True):
-                        d_date = st.date_input("日期", datetime.now())
-                        d_content = st.text_input("决策内容", placeholder="例如：减仓30%")
-                        d_reason = st.text_area("决策原因", placeholder="为什么做这个决策？", height=80)
-                        if st.form_submit_button("记录决策", use_container_width=True):
-                            c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)", 
-                                      (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
+        with col_left:
+            st.markdown("#### 🧠 交易逻辑与参数设置")
+            with st.form("strategy_form"):
+                new_logic = st.text_area("交易逻辑 (买卖原则)", value=saved_logic, height=100)
+                
+                col_annual, _ = st.columns([1, 1])
+                new_annual = col_annual.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
+                
+                st.caption("📥 买入监控设置")
+                c_buy1, c_buy2 = st.columns(2)
+                new_buy_base = c_buy1.number_input("买入基准价", value=float(s_buy_base), step=0.01)
+                new_buy_drop = c_buy2.number_input("下跌比例 (%)", value=float(s_buy_drop), step=0.1)
+                
+                st.caption("📤 卖出监控设置")
+                c_sell1, c_sell2 = st.columns(2)
+                new_sell_base = c_sell1.number_input("卖出基准价", value=float(s_sell_base), step=0.01)
+                new_sell_rise = c_sell2.number_input("上涨比例 (%)", value=float(s_sell_rise), step=0.1)
+                
+                if st.form_submit_button("💾 保存所有设置", use_container_width=True):
+                    c.execute("""
+                        INSERT OR REPLACE INTO strategy_notes 
+                        (code, logic, max_holding_amount, annual_return, buy_base_price, buy_drop_pct, sell_base_price, sell_rise_pct) 
+                        VALUES (?,?,?,?,?,?,?,?)
+                    """, (selected_stock, new_logic, max_occupied_amount, new_annual, new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
+                    conn.commit()
+                    st.success("已保存")
+                    st.rerun()
+
+        with col_right:
+            st.markdown("#### 📜 决策历史记录")
+            with st.form("new_decision", clear_on_submit=True):
+                dcols = st.columns([1, 2])
+                d_date = dcols[0].date_input("日期", datetime.now())
+                d_content = dcols[1].text_input("决策内容", placeholder="例如：减仓30%")
+                d_reason = st.text_area("决策原因", placeholder="为什么做这个决策？", height=68)
+                if st.form_submit_button("➕ 记录决策", use_container_width=True):
+                    c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)", 
+                              (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
+                    conn.commit()
+                    st.rerun()
+            
+            decisions = pd.read_sql("SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC", conn, params=(selected_stock,))
+            if decisions.empty:
+                st.info("暂无决策记录")
+            else:
+                for _, row in decisions.iterrows():
+                    with st.container(border=True):
+                        head_col, del_col = st.columns([9, 1])
+                        head_col.markdown(f"**{row['date']} | {row['decision']}**")
+                        if del_col.button("🗑️", key=f"del_dec_{row['id']}"):
+                            c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
                             conn.commit()
                             st.rerun()
-            with list_col:
-                decisions = pd.read_sql("SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC", conn, params=(selected_stock,))
-                if decisions.empty:
-                    st.info("暂无决策记录")
-                else:
-                    for _, row in decisions.iterrows():
-                        with st.container(border=True):
-                            head_col, del_col = st.columns([9, 1])
-                            head_col.markdown(f"**{row['date']} | {row['decision']}**")
-                            if del_col.button("🗑️", key=f"del_dec_{row['id']}"):
-                                c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
-                                conn.commit()
-                                st.rerun()
+                        if row['reason']:
                             st.caption(row['reason'])
 
     else:
