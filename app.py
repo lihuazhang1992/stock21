@@ -199,7 +199,7 @@ def get_dynamic_stock_list():
     except:
         return ["汇丰控股", "中芯国际", "比亚迪"]
 
-# 注入全局 CSS 样式（含隐藏 components.html 的 1px iframe）
+# 注入全局 CSS 样式（含隐藏 components.html 的 1px iframe + 核心数据卡片）
 st.markdown("""
     <style>
     .custom-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
@@ -224,6 +224,38 @@ st.markdown("""
         overflow: hidden !important;
         margin: 0 !important;
         padding: 0 !important;
+    }
+    /* 核心数据概览卡片网格 */
+    .mc-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin: 4px 0 12px 0;
+    }
+    .mc-card {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px;
+        padding: 10px 12px 8px 12px;
+        min-width: 0;
+    }
+    .mc-label {
+        font-size: 0.75em;
+        color: rgba(255,255,255,0.55);
+        margin-bottom: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .mc-value {
+        font-size: 1.18em;
+        font-weight: 600;
+        color: #fff;
+        white-space: nowrap;
+    }
+    .mc-sub {
+        font-size: 0.78em;
+        margin-top: 2px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -444,40 +476,6 @@ if choice == "📈 策略复盘":
         sell_rise_val = f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置"
 
         st.markdown(f"""
-        <style>
-        .mc-grid {{
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            margin: 4px 0 12px 0;
-        }}
-        .mc-card {{
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 8px;
-            padding: 10px 12px 8px 12px;
-            min-width: 0;
-        }}
-        .mc-label {{
-            font-size: 0.75em;
-            color: rgba(255,255,255,0.55);
-            margin-bottom: 4px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }}
-        .mc-value {{
-            font-size: 1.18em;
-            font-weight: 600;
-            color: #fff;
-            white-space: nowrap;
-        }}
-        .mc-sub {{
-            font-size: 0.78em;
-            margin-top: 2px;
-        }}
-        </style>
-
         <div class="mc-grid">
           <div class="mc-card">
             <div class="mc-label">持仓数量</div>
