@@ -208,6 +208,8 @@ st.markdown("""
     .custom-table tbody tr:nth-of-type(even) { background-color: #f8f8f8; }
     .profit-red { color: #d32f2f; font-weight: bold; }
     .loss-green { color: #388e3c; font-weight: bold; }
+    /* 压缩主内容区顶部空白 */
+    .block-container { padding-top: 1rem !important; }
     /* 把 components.html(height=1) 产生的 1px iframe 容器压缩掉，不占页面空间 */
     iframe[title="st_components_v1.html"] {
         display: block !important;
@@ -326,7 +328,7 @@ choice = st.sidebar.radio("功能导航", menu)
 
 # --- 📈 策略复盘 ---
 if choice == "📈 策略复盘":
-    st.header("📈 策略复盘与深度账本")
+    st.markdown('<h2 style="margin-top:-2rem;margin-bottom:0.5rem">📈 策略复盘与深度账本</h2>', unsafe_allow_html=True)
     
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
