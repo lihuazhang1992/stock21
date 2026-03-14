@@ -199,7 +199,7 @@ def get_dynamic_stock_list():
     except:
         return ["汇丰控股", "中芯国际", "比亚迪"]
 
-# 注入全局 CSS 样式
+# 注入全局 CSS 样式（含隐藏 components.html 的 1px iframe）
 st.markdown("""
     <style>
     .custom-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
@@ -208,61 +208,83 @@ st.markdown("""
     .custom-table tbody tr:nth-of-type(even) { background-color: #f8f8f8; }
     .profit-red { color: #d32f2f; font-weight: bold; }
     .loss-green { color: #388e3c; font-weight: bold; }
+    /* 把 components.html(height=1) 产生的 1px iframe 容器压缩掉，不占页面空间 */
+    iframe[title="st_components_v1.html"] {
+        display: block !important;
+        height: 1px !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        visibility: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stCustomComponentV1"] {
+        height: 1px !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # 注入"回到顶部"浮动按钮 + 选股下拉框 sticky 冻结
-# 使用 components.html 直接注入父frame，突破 iframe 同源限制
+# height 必须 >= 1，否则 Streamlit 会把 iframe 设为 display:none，JS 不会执行
 components.html("""
 <script>
 (function() {
-    // ---- 1. 回到顶部浮动按钮 ----
     var doc = window.parent.document;
 
-    // 防止重复注入
-    if (doc.getElementById('wb-back-to-top')) return;
-
-    var btn = doc.createElement('button');
-    btn.id = 'wb-back-to-top';
-    btn.innerHTML = '&#8679;';
-    btn.title = '回到顶部';
-    btn.style.cssText = [
-        'position:fixed', 'bottom:40px', 'right:40px', 'z-index:999999',
-        'width:52px', 'height:52px', 'border-radius:50%', 'border:none',
-        'background:linear-gradient(135deg,#009879,#00c49f)', 'color:#fff',
-        'font-size:26px', 'font-weight:bold', 'cursor:pointer',
-        'box-shadow:0 4px 16px rgba(0,150,120,0.5)',
-        'display:flex', 'align-items:center', 'justify-content:center',
-        'opacity:0.9', 'transition:opacity 0.2s,transform 0.2s',
-        'line-height:1'
-    ].join(';');
-    btn.onmouseenter = function(){ this.style.opacity='1'; this.style.transform='scale(1.12)'; };
-    btn.onmouseleave = function(){ this.style.opacity='0.9'; this.style.transform='scale(1)'; };
-    btn.onclick = function() {
-        // Streamlit 的可滚动容器是 section.main 下的第一个 overflow:auto 元素
-        var scrollEl = doc.querySelector('[data-testid="stAppViewBlockContainer"]')
-                    || doc.querySelector('.main .block-container')
-                    || doc.querySelector('section.main');
-        // 向上查找真正会滚动的祖先
-        function findScrollable(el) {
-            while (el && el !== doc.body) {
-                if (el.scrollTop > 0) return el;
-                el = el.parentElement;
+    // ---- 1. 回到顶部浮动按钮 ----
+    // 防止重复注入（页面 rerun 时只注入一次）
+    if (!doc.getElementById('wb-back-to-top')) {
+        var btn = doc.createElement('button');
+        btn.id = 'wb-back-to-top';
+        btn.innerHTML = '&#8679;';
+        btn.title = '回到顶部';
+        btn.style.cssText = [
+            'position:fixed', 'bottom:40px', 'right:40px', 'z-index:999999',
+            'width:52px', 'height:52px', 'border-radius:50%', 'border:none',
+            'background:linear-gradient(135deg,#009879,#00c49f)', 'color:#fff',
+            'font-size:26px', 'font-weight:bold', 'cursor:pointer',
+            'box-shadow:0 4px 16px rgba(0,150,120,0.5)',
+            'display:flex', 'align-items:center', 'justify-content:center',
+            'opacity:0.9', 'transition:opacity 0.2s,transform 0.2s',
+            'line-height:1'
+        ].join(';');
+        btn.onmouseenter = function(){ this.style.opacity='1'; this.style.transform='scale(1.12)'; };
+        btn.onmouseleave = function(){ this.style.opacity='0.9'; this.style.transform='scale(1)'; };
+        btn.onclick = function() {
+            // 策略：遍历所有候选容器，找到真正有 scrollTop > 0 的那个
+            var candidates = [
+                doc.querySelector('[data-testid="stAppViewBlockContainer"]'),
+                doc.querySelector('[data-testid="stMain"]'),
+                doc.querySelector('section.main'),
+                doc.querySelector('.main'),
+                doc.documentElement,
+                doc.body
+            ];
+            var scrolled = false;
+            for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                if (el && el.scrollTop > 0) {
+                    el.scrollTo({ top: 0, behavior: 'smooth' });
+                    scrolled = true;
+                    break;
+                }
             }
-            return doc.documentElement;
-        }
-        var target = findScrollable(scrollEl) || doc.documentElement;
-        target.scrollTo({ top: 0, behavior: 'smooth' });
-        // 同时尝试 section.main
-        var main = doc.querySelector('section.main');
-        if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-    doc.body.appendChild(btn);
+            // 兜底：把所有候选都 scroll 一遍
+            if (!scrolled) {
+                for (var j = 0; j < candidates.length; j++) {
+                    if (candidates[j]) candidates[j].scrollTo({ top: 0, behavior: 'smooth' });
+                }
+            }
+        };
+        doc.body.appendChild(btn);
+    }
 
     // ---- 2. 选股下拉框 Sticky 冻结 ----
-    // 等待 Streamlit DOM 渲染完成后操作
     function stickySelectbox() {
-        // 找到策略复盘页中 label 含"选择分析股票"的 selectbox 容器
         var labels = doc.querySelectorAll('[data-testid="stSelectbox"] label');
         for (var i = 0; i < labels.length; i++) {
             if (labels[i].textContent.indexOf('选择分析股票') !== -1) {
@@ -284,20 +306,17 @@ components.html("""
         }
     }
 
-    // 初次执行 + 每次 Streamlit rerun 后重新执行
-    setTimeout(stickySelectbox, 800);
+    setTimeout(stickySelectbox, 600);
     setTimeout(stickySelectbox, 1500);
-    setTimeout(stickySelectbox, 3000);
 
-    // MutationObserver 监听 DOM 变化，自动重应用 sticky
-    var observer = new MutationObserver(function(mutations) {
+    var observer = new MutationObserver(function() {
         clearTimeout(window.__stickyTimer);
         window.__stickyTimer = setTimeout(stickySelectbox, 300);
     });
     observer.observe(doc.body, { childList: true, subtree: true });
 })();
 </script>
-""", height=0)
+""", height=1)
 
 # --- 2. 侧边栏导航 ---
 menu = ["📈 策略复盘", "📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
@@ -404,48 +423,116 @@ if choice == "📈 策略复盘":
         st.subheader(f"📊 {selected_stock} 核心数据概览")
 
         # --- 1. 数据准备 ---
-        # 计算监控价与状态
         buy_monitor_p = s_buy_base * (1 - s_buy_drop / 100) if s_buy_base > 0 else 0
         sell_monitor_p = s_sell_base * (1 + s_sell_rise / 100) if s_sell_base > 0 else 0
         is_buy_triggered = (s_buy_base > 0 and now_p <= buy_monitor_p)
         is_sell_triggered = (s_sell_base > 0 and now_p >= sell_monitor_p)
-        
-        # --- 2. 3行x4列 固定网格展示 ---
-        # 第一行：持仓基础数据
-        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        r1c1.metric("持仓数量", f"{net_q}")
-        r1c2.metric("持仓市值", f"{abs(net_q) * now_p:,.2f}")
-        r1c3.metric("成本价", f"{avg_cost:.3f}")
-        r1c4.metric("当前现价", f"{now_p:.3f}")
 
-        # 第二行：盈亏与收益
-        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-        p_color = "normal" if holding_profit_amount >= 0 else "inverse"
-        r2c1.metric("持仓盈亏额", f"{holding_profit_amount:,.2f}", delta=f"{holding_profit_pct:.2f}%", delta_color=p_color)
-        r2c2.metric("已实现利润", f"{realized_profit:,.2f}")
-        r2c3.metric("最高占用金额", f"{max_occupied_amount:,.2f}")
-        r2c4.metric("历史年化收益", f"{saved_annual:.2f}%")
+        # --- 2. 用 HTML 紧凑卡片网格展示（3行×4列，无多余列间距）---
+        pnl_color = "#d32f2f" if holding_profit_amount >= 0 else "#388e3c"
+        pnl_sign  = "+" if holding_profit_amount >= 0 else ""
+        rp_color  = "#d32f2f" if realized_profit >= 0 else "#388e3c"
+        rp_sign   = "+" if realized_profit >= 0 else ""
 
-        # 第三行：监控与涨跌幅 (固定位置)
-        r3c1, r3c2, r3c3, r3c4 = st.columns(4)
-        
-        # 买入监控价
-        if s_buy_base > 0:
-            b_label = "🔴 买入监控 (达标)" if is_buy_triggered else "📥 买入监控 (观察)"
-            r3c1.metric(b_label, f"{buy_monitor_p:.3f}")
-        else:
-            r3c1.metric("📥 买入监控", "未设置")
-            
-        # 卖出监控价
-        if s_sell_base > 0:
-            s_label = "🔴 卖出监控 (达标)" if is_sell_triggered else "📤 卖出监控 (观察)"
-            r3c2.metric(s_label, f"{sell_monitor_p:.3f}")
-        else:
-            r3c2.metric("📤 卖出监控", "未设置")
+        b_label = ("🔴 买入监控 <small style='color:#ff6b6b'>(达标)</small>" if is_buy_triggered
+                   else "📥 买入监控 <small style='opacity:0.6'>(观察)</small>")
+        s_label = ("🔴 卖出监控 <small style='color:#ff6b6b'>(达标)</small>" if is_sell_triggered
+                   else "📤 卖出监控 <small style='opacity:0.6'>(观察)</small>")
 
-        # 上涨比例与下跌比例 (来自监控设置)
-        r3c3.metric("📤 卖出上涨比例", f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置")
-        r3c4.metric("📥 买入下跌比例", f"{s_buy_drop:.2f}%" if s_buy_drop else "未设置")
+        buy_val  = f"{buy_monitor_p:.3f}"  if s_buy_base  > 0 else "未设置"
+        sell_val = f"{sell_monitor_p:.3f}" if s_sell_base > 0 else "未设置"
+        buy_drop_val  = f"{s_buy_drop:.2f}%"  if s_buy_drop  else "未设置"
+        sell_rise_val = f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置"
+
+        st.markdown(f"""
+        <style>
+        .mc-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin: 4px 0 12px 0;
+        }}
+        .mc-card {{
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 8px;
+            padding: 10px 12px 8px 12px;
+            min-width: 0;
+        }}
+        .mc-label {{
+            font-size: 0.75em;
+            color: rgba(255,255,255,0.55);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .mc-value {{
+            font-size: 1.18em;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+        }}
+        .mc-sub {{
+            font-size: 0.78em;
+            margin-top: 2px;
+        }}
+        </style>
+
+        <div class="mc-grid">
+          <div class="mc-card">
+            <div class="mc-label">持仓数量</div>
+            <div class="mc-value">{net_q}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">持仓市值</div>
+            <div class="mc-value">{abs(net_q) * now_p:,.2f}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">成本价</div>
+            <div class="mc-value">{avg_cost:.3f}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">当前现价</div>
+            <div class="mc-value">{now_p:.3f}</div>
+          </div>
+
+          <div class="mc-card">
+            <div class="mc-label">持仓盈亏额</div>
+            <div class="mc-value" style="color:{pnl_color}">{pnl_sign}{holding_profit_amount:,.2f}</div>
+            <div class="mc-sub" style="color:{pnl_color}">{pnl_sign}{holding_profit_pct:.2f}%</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">已实现利润</div>
+            <div class="mc-value" style="color:{rp_color}">{rp_sign}{realized_profit:,.2f}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">最高占用金额</div>
+            <div class="mc-value">{max_occupied_amount:,.2f}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">历史年化收益</div>
+            <div class="mc-value">{saved_annual:.2f}%</div>
+          </div>
+
+          <div class="mc-card">
+            <div class="mc-label">{b_label}</div>
+            <div class="mc-value">{ buy_val }</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">{s_label}</div>
+            <div class="mc-value">{ sell_val }</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">📤 卖出上涨比例</div>
+            <div class="mc-value">{sell_rise_val}</div>
+          </div>
+          <div class="mc-card">
+            <div class="mc-label">📥 买入下跌比例</div>
+            <div class="mc-value">{buy_drop_val}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         st.divider()
 
