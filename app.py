@@ -225,40 +225,8 @@ st.markdown("""
         margin: 0 !important;
         padding: 0 !important;
     }
-    /* 核心数据概览卡片网格 */
-    .mc-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 8px;
-        margin: 4px 0 12px 0;
-        width: 100%;
-    }
-    .mc-card {
-        background: #f0f2f6;
-        border: 1px solid #d0d3da;
-        border-radius: 8px;
-        padding: 10px 12px 8px 12px;
-        min-width: 0;
-    }
-    .mc-label {
-        font-size: 0.75em;
-        color: #666;
-        margin-bottom: 4px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .mc-value {
-        font-size: 1.18em;
-        font-weight: 600;
-        color: #111;
-        white-space: nowrap;
-    }
-    .mc-sub {
-        font-size: 0.78em;
-        margin-top: 2px;
-        color: #333;
-    }
+    </style>
+""", unsafe_allow_html=True)
     </style>
 """, unsafe_allow_html=True)
 
@@ -477,62 +445,37 @@ if choice == "📈 策略复盘":
         buy_drop_val  = f"{s_buy_drop:.2f}%"  if s_buy_drop  else "未设置"
         sell_rise_val = f"{s_sell_rise:.2f}%" if s_sell_rise else "未设置"
 
-        card_html = f"""
-        <style>
-        .mc-grid {{
-            display: grid !important;
-            grid-template-columns: repeat(4, 1fr) !important;
-            gap: 8px;
-            margin: 4px 0 12px 0;
-            width: 100%;
-            font-family: sans-serif;
-        }}
-        .mc-card {{
-            background: #f0f2f6;
-            border: 1px solid #d0d3da;
-            border-radius: 8px;
-            padding: 10px 12px 8px 12px;
-            min-width: 0;
-            box-sizing: border-box;
-        }}
-        .mc-label {{
-            font-size: 0.73em;
-            color: #666;
-            margin-bottom: 4px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }}
-        .mc-value {{
-            font-size: 1.15em;
-            font-weight: 600;
-            color: #111;
-            white-space: nowrap;
-        }}
-        .mc-sub {{
-            font-size: 0.78em;
-            margin-top: 2px;
-            color: #333;
-        }}
-        </style>
-        <div class="mc-grid">
-          <div class="mc-card"><div class="mc-label">持仓数量</div><div class="mc-value">{net_q}</div></div>
-          <div class="mc-card"><div class="mc-label">持仓市值</div><div class="mc-value">{abs(net_q) * now_p:,.2f}</div></div>
-          <div class="mc-card"><div class="mc-label">成本价</div><div class="mc-value">{avg_cost:.3f}</div></div>
-          <div class="mc-card"><div class="mc-label">当前现价</div><div class="mc-value">{now_p:.3f}</div></div>
+        # 用 inline style 直接写，不依赖任何外部 class，确保任何环境都能渲染
+        def _card(label, value, sub="", val_color="#111"):
+            sub_html = f'<div style="font-size:0.78em;margin-top:2px;color:{val_color}">{sub}</div>' if sub else ""
+            return f"""<div style="background:#f0f2f6;border:1px solid #d0d3da;border-radius:8px;padding:10px 12px 8px;min-width:0;box-sizing:border-box;">
+  <div style="font-size:0.72em;color:#666;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{label}</div>
+  <div style="font-size:1.12em;font-weight:700;color:{val_color};white-space:nowrap">{value}</div>{sub_html}
+</div>"""
 
-          <div class="mc-card"><div class="mc-label">持仓盈亏额</div><div class="mc-value" style="color:{pnl_color}">{pnl_str}</div><div class="mc-sub" style="color:{pnl_color}">{pnl_pct}</div></div>
-          <div class="mc-card"><div class="mc-label">已实现利润</div><div class="mc-value" style="color:{rp_color}">{rp_str}</div></div>
-          <div class="mc-card"><div class="mc-label">最高占用金额</div><div class="mc-value">{max_occupied_amount:,.2f}</div></div>
-          <div class="mc-card"><div class="mc-label">历史年化收益</div><div class="mc-value">{saved_annual:.2f}%</div></div>
+        row1 = [
+            _card("持仓数量",       f"{net_q}"),
+            _card("持仓市值",       f"{abs(net_q)*now_p:,.2f}"),
+            _card("成本价",         f"{avg_cost:.3f}"),
+            _card("当前现价",       f"{now_p:.3f}"),
+            _card("持仓盈亏额",     pnl_str,  sub=pnl_pct,  val_color=pnl_color),
+            _card("已实现利润",     rp_str,                  val_color=rp_color),
+        ]
+        row2 = [
+            _card("最高占用金额",   f"{max_occupied_amount:,.2f}"),
+            _card("历史年化收益",   f"{saved_annual:.2f}%"),
+            _card(b_label,          buy_val),
+            _card(s_label,          sell_val),
+            _card("📤 卖出上涨比例", sell_rise_val),
+            _card("📥 买入下跌比例", buy_drop_val),
+        ]
 
-          <div class="mc-card"><div class="mc-label">{b_label}</div><div class="mc-value">{buy_val}</div></div>
-          <div class="mc-card"><div class="mc-label">{s_label}</div><div class="mc-value">{sell_val}</div></div>
-          <div class="mc-card"><div class="mc-label">📤 卖出上涨比例</div><div class="mc-value">{sell_rise_val}</div></div>
-          <div class="mc-card"><div class="mc-label">📥 买入下跌比例</div><div class="mc-value">{buy_drop_val}</div></div>
-        </div>
-        """
-        components.html(card_html, height=175)
+        grid_style = 'style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:4px 0 8px;width:100%"'
+        st.markdown(
+            f'<div {grid_style}>{"".join(row1)}</div>'
+            f'<div {grid_style}>{"".join(row2)}</div>',
+            unsafe_allow_html=True
+        )
 
         st.divider()
 
