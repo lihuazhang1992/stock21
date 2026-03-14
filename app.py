@@ -227,8 +227,6 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-    </style>
-""", unsafe_allow_html=True)
 
 # 注入"回到顶部"浮动按钮 + 选股下拉框 sticky 冻结
 # height 必须 >= 1，否则 Streamlit 会把 iframe 设为 display:none，JS 不会执行
