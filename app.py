@@ -218,7 +218,27 @@ h1, h2, h3, h4 {
     color: var(--text-primary) !important;
     letter-spacing: -0.02em !important;
 }
-.stHeader, [data-testid="stHeader"] { display: none !important; }
+/* 隐藏顶部工具栏，但保留侧边栏展开/收起按钮 */
+[data-testid="stHeader"] [data-testid="stToolbar"],
+[data-testid="stHeader"] .stToolbar,
+[data-testid="stStatusWidget"],
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stHeader"] {
+    background: transparent !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
+/* 让侧边栏展开按钮（收起后的 > 箭头）始终可见 */
+[data-testid="collapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0 !important;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.4) !important;
+    z-index: 999 !important;
+}
 
 /* ─── 通用卡片 ─── */
 .pro-card {
