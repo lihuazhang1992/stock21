@@ -627,6 +627,58 @@ components.html("""
 <script>
 (function() {
     var doc = window.parent.document;
+
+    // ── 侧边栏展开/收起 悬浮按钮 ──
+    function makeSidebarToggle() {
+        if (doc.getElementById('__sb_toggle_btn')) return;
+        var btn = doc.createElement('button');
+        btn.id = '__sb_toggle_btn';
+        btn.innerHTML = '&#9776;';
+        btn.title = '展开/收起导航栏';
+        btn.style.cssText = [
+            'position:fixed','top:14px','left:14px','z-index:99999',
+            'width:38px','height:38px','border-radius:10px',
+            'background:linear-gradient(135deg,#1a2235,#162032)',
+            'border:1px solid rgba(99,179,237,0.35)',
+            'color:#f0f6ff','font-size:18px','cursor:pointer',
+            'display:flex','align-items:center','justify-content:center',
+            'box-shadow:0 4px 20px rgba(0,0,0,0.5)',
+            'transition:all 0.18s'
+        ].join(';');
+        btn.onmouseenter = function(){ this.style.background='linear-gradient(135deg,#3b82f6,#06b6d4)'; this.style.borderColor='#3b82f6'; };
+        btn.onmouseleave = function(){ this.style.background='linear-gradient(135deg,#1a2235,#162032)'; this.style.borderColor='rgba(99,179,237,0.35)'; };
+        btn.onclick = function() {
+            // 依次尝试各版本 Streamlit 的原生收起/展开按钮
+            var selectors = [
+                '[data-testid="stSidebarCollapseButton"] button',
+                '[data-testid="collapsedControl"] button',
+                '[data-testid="stSidebar"] [data-testid="baseButton-headerNoPadding"]',
+                '[data-testid="stSidebarContent"] ~ button',
+                'section[data-testid="stSidebar"] + div button',
+                '[aria-label="Close sidebar"]',
+                '[aria-label="Open sidebar"]',
+                '[aria-label="收起侧边栏"]',
+                '[aria-label="展开侧边栏"]'
+            ];
+            var clicked = false;
+            for (var i = 0; i < selectors.length; i++) {
+                var el = doc.querySelector(selectors[i]);
+                if (el) { el.click(); clicked = true; break; }
+            }
+            // 如果都找不到，直接操作 sidebar 的 aria-expanded 属性
+            if (!clicked) {
+                var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                if (sidebar) {
+                    var isCollapsed = sidebar.getAttribute('aria-expanded') === 'false';
+                    sidebar.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+                }
+            }
+        };
+        doc.body.appendChild(btn);
+    }
+    setTimeout(makeSidebarToggle, 800);
+    var sbObs = new MutationObserver(function(){ makeSidebarToggle(); });
+    sbObs.observe(doc.body, { childList: true, subtree: false });
     if (!doc.getElementById('wb-back-to-top')) {
         var btn = doc.createElement('button');
         btn.id = 'wb-back-to-top';
