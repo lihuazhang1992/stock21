@@ -25,11 +25,11 @@ TICKER_MAP = {
     "中银香港":  "2388.HK",
     "紫金矿业":  "2899.HK",
     "电能实业":  "0006.HK",
+    "福耀玻璃":  "3606.HK",  # 港股
     # A股
     "阳光电源":  "300274.SZ",
     "长江电力":  "600900.SS",
-    "福耀玻璃":  "600660.SS",
-    "纳指ETF":   "513100.SS",
+    "纳指ETF":   "159941.SZ", # A股深交所纳指ETF
     # 美股
     "联合健康":  "UNH",
     "特斯拉":    "TSLA",
@@ -122,6 +122,10 @@ if not DB_FILE.exists():
 conn = get_connection()
 c = conn.cursor()
 
+c.execute('''CREATE TABLE IF NOT EXISTS stock_info (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_name TEXT UNIQUE,
+    stock_code TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, code TEXT,
     action TEXT, price REAL, quantity INTEGER, note TEXT)''')
@@ -1876,6 +1880,135 @@ elif choice == "📓 复盘日记":
                             st.warning("再点一次确认删除")
 
             st.caption(f"共 {len(journal_df)} 条 · 当前显示 {len(display_df)} 条")
+
+# =====================================================================
+#  📝 交易录入
+# =====================================================================
+elif choice == "📝 交易录入":
+    _page_title("📝", "交易录入", "快速添加交易记录")
+
+    # ── 股票管理区域 ──
+    st.markdown('<div style="font-size:0.95em;font-weight:700;color:var(--text-primary);margin-bottom:10px">📋 股票列表管理</div>', unsafe_allow_html=True)
+
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+
+    # 添加新股票
+    with st.form("add_stock_form", clear_on_submit=True):
+        new_stock_name = st.text_input("股票名称", placeholder="例如：中芯国际")
+        new_stock_code = st.text_input("股票代码", placeholder="例如：0981.HK")
+        submitted = st.form_submit_button("➕ 添加股票", type="primary", use_container_width=True)
+
+        if submitted and new_stock_name and new_stock_code:
+            try:
+                c.execute("INSERT INTO stock_info (stock_name, stock_code) VALUES (?, ?)",
+                          (new_stock_name.strip(), new_stock_code.strip()))
+                conn.commit()
+                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                st.success(f"✅ 已添加：{new_stock_name} ({new_stock_code})")
+                st.rerun()
+            except sqlite3.IntegrityError:
+                st.error("❌ 该股票名称已存在，请使用其他名称或删除后重新添加")
+            except Exception as e:
+                st.error(f"❌ 添加失败：{e}")
+
+    # 显示股票列表
+    st.markdown("---")
+    st.markdown('<div style="font-size:0.82em;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px">已管理的股票</div>', unsafe_allow_html=True)
+
+    stock_list = pd.read_sql("SELECT id, stock_name, stock_code FROM stock_info ORDER BY stock_name", conn)
+
+    if not stock_list.empty:
+        html = '<table class="pro-table"><thead><tr><th>股票名称</th><th>股票代码</th><th>操作</th></tr></thead><tbody>'
+        for _, row in stock_list.iterrows():
+            html += f"""<tr>
+                <td><b>{row['stock_name']}</b></td>
+                <td>{row['stock_code']}</td>
+                <td>
+                    <button type="button" onclick="delete_stock({row['id']})" style="background:#f43f5e;color:white;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:0.85em">删除</button>
+                </td>
+            </tr>"""
+        html += '</tbody></table>'
+        st.markdown(html, unsafe_allow_html=True)
+
+        # JavaScript 删除函数
+        components.html("""
+        <script>
+        function delete_stock(id) {
+            if (confirm('确定要删除这只股票吗？此操作不可撤销。')) {
+                const deleteEvent = new CustomEvent('delete-stock', { detail: { id: id } });
+                window.parent.document.dispatchEvent(deleteEvent);
+            }
+        }
+        </script>
+        <script>
+        window.parent.document.addEventListener('delete-stock', function(e) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('delete_stock_id', e.detail.id);
+            window.location.href = url.toString();
+        });
+        </script>
+        """, height=0)
+
+        # 检查是否有删除请求
+        if 'delete_stock_id' in st.query_params:
+            delete_id = st.query_params['delete_stock_id']
+            try:
+                # 检查该股票是否有交易记录
+                stock_name = c.execute("SELECT stock_name FROM stock_info WHERE id = ?", (delete_id,)).fetchone()
+                if stock_name:
+                    stock_name = stock_name[0]
+                    has_trades = c.execute("SELECT COUNT(*) FROM trades WHERE code = ?", (stock_name,)).fetchone()[0]
+                    if has_trades > 0:
+                        st.warning(f"⚠️ 该股票有 {has_trades} 条交易记录，请先删除交易记录再删除股票")
+                    else:
+                        c.execute("DELETE FROM stock_info WHERE id = ?", (delete_id,))
+                        c.execute("DELETE FROM prices WHERE code = ?", (stock_name,))
+                        c.execute("DELETE FROM strategy_notes WHERE code = ?", (stock_name,))
+                        c.execute("DELETE FROM price_targets WHERE code = ?", (stock_name,))
+                        c.execute("DELETE FROM signals WHERE code = ?", (stock_name,))
+                        conn.commit()
+                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        st.success(f"✅ 已删除：{stock_name}")
+                        st.query_params.clear()
+                        st.rerun()
+            except Exception as e:
+                st.error(f"❌ 删除失败：{e}")
+    else:
+        st.info("📌 暂无股票，请在上方添加")
+
+    st.divider()
+
+    # ── 交易录入区域 ──
+    st.markdown('<div style="font-size:0.95em;font-weight:700;color:var(--text-primary);margin-bottom:10px">✏️ 录入交易</div>', unsafe_allow_html=True)
+
+    with st.form("add_trade_form", clear_on_submit=True):
+        col_date, col_stock, col_action = st.columns([2, 2, 1])
+        trade_date = col_date.date_input("交易日期", value=datetime.now())
+        trade_stock = col_stock.selectbox("选择股票", options=sorted(stock_list['stock_name'].tolist()) if not stock_list.empty else [], index=None)
+        trade_action = col_action.selectbox("操作", options=["买入", "卖出"])
+
+        col_price, col_qty, col_note = st.columns([2, 2, 3])
+        trade_price = col_price.number_input("成交价格", min_value=0.0, step=0.001, format="%.3f")
+        trade_qty = col_qty.number_input("数量", min_value=1, step=1)
+        trade_note = col_note.text_input("备注（可选）", placeholder="交易说明")
+
+        submitted_trade = st.form_submit_button("📥 录入交易", type="primary", use_container_width=True)
+
+        if submitted_trade:
+            if trade_stock and trade_price > 0 and trade_qty > 0:
+                try:
+                    c.execute(
+                        "INSERT INTO trades (date, code, action, price, quantity, note) VALUES (?, ?, ?, ?, ?, ?)",
+                        (trade_date.strftime('%Y-%m-%d'), trade_stock, trade_action, trade_price, int(trade_qty), trade_note.strip())
+                    )
+                    conn.commit()
+                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    st.success(f"✅ 交易已录入：{trade_stock} {trade_action} {trade_qty}股 @ {trade_price}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 录入失败：{e}")
+            else:
+                st.warning("⚠️ 请填写完整的交易信息")
 
 # =====================================================================
 #  底部工具栏
