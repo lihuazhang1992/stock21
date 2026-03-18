@@ -1050,6 +1050,9 @@ elif choice == "📊 实时持仓":
                                 "INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
                                 (_name, _price, _mc)
                             )
+                            # 清除 session_state 中的输入框缓存，让 rerun 时显示新价格
+                            if f"p_{_name}" in st.session_state:
+                                del st.session_state[f"p_{_name}"]
                         conn.commit()
                         threading.Thread(target=sync_db_to_github, daemon=True).start()
                         _detail = "  |  ".join([f"{k} → {v}" for k, v in _fetched.items()])
