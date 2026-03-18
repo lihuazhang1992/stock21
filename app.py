@@ -8,6 +8,54 @@ import sqlite3
 import threading
 from datetime import datetime
 
+try:
+    import yfinance as yf
+    _YF_OK = True
+except ImportError:
+    _YF_OK = False
+
+# ── 股票名称 → yfinance Ticker 映射 ──
+# 港股后缀 .HK，A股上交所 .SS / 深交所 .SZ，美股直接代码
+# 如需新增持仓股票，在此表里追加一行即可
+TICKER_MAP = {
+    # 港股
+    "中芯国际":  "0981.HK",
+    "比亚迪":    "1211.HK",
+    "汇丰控股":  "0005.HK",
+    "中银香港":  "2388.HK",
+    "紫金矿业":  "2899.HK",
+    "电能实业":  "0006.HK",
+    # A股
+    "阳光电源":  "300274.SZ",
+    "长江电力":  "600900.SS",
+    "福耀玻璃":  "600660.SS",
+    "纳指ETF":   "513100.SS",
+    # 美股
+    "联合健康":  "UNH",
+    "特斯拉":    "TSLA",
+    "伯克希尔":  "BRK-B",
+}
+
+def fetch_latest_prices(stock_names: list) -> dict:
+    """
+    通过 yfinance 批量拉取最新收盘价。
+    返回 {股票名称: 最新价(float)}，失败的股票不包含在结果中。
+    """
+    if not _YF_OK:
+        return {}
+    result = {}
+    for name in stock_names:
+        ticker_code = TICKER_MAP.get(name)
+        if not ticker_code:
+            continue
+        try:
+            hist = yf.Ticker(ticker_code).history(period="2d")
+            if not hist.empty:
+                result[name] = round(float(hist["Close"].iloc[-1]), 4)
+        except Exception:
+            pass
+    return result
+
 # ============== 自动备份 GitHub ==============
 DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
 try:
@@ -986,6 +1034,39 @@ elif choice == "📊 实时持仓":
         with st.expander("🛠️ 维护现价与手动成本", expanded=True):
             raw_prices  = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
             config_query = {row[0]: (row[1], row[2]) for row in raw_prices}
+
+            # ── 自动更新现价 ──
+            if _YF_OK:
+                _btn_col, _tip_col = st.columns([1, 3])
+                if _btn_col.button("🔄 自动更新全部现价", type="primary", use_container_width=True):
+                    with _tip_col:
+                        with st.spinner("正在拉取最新行情，请稍候…"):
+                            _fetched = fetch_latest_prices(list(stocks))
+                    if _fetched:
+                        for _name, _price in _fetched.items():
+                            _old = config_query.get(_name, (0.0, 0.0))
+                            _mc  = float(_old[1]) if _old[1] is not None else 0.0
+                            c.execute(
+                                "INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
+                                (_name, _price, _mc)
+                            )
+                        conn.commit()
+                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        # 刷新本地缓存
+                        raw_prices   = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
+                        config_query = {row[0]: (row[1], row[2]) for row in raw_prices}
+                        _detail = "  |  ".join([f"{k} → {v}" for k, v in _fetched.items()])
+                        _tip_col.success(f"✅ 已更新 {len(_fetched)} 只：{_detail}")
+                        _no_map = [s for s in stocks if s not in TICKER_MAP]
+                        if _no_map:
+                            _tip_col.warning(f"⚠️ 未配置 Ticker（需手动维护）：{'、'.join(_no_map)}")
+                    else:
+                        _tip_col.error("❌ 获取失败，请检查网络后重试，或手动填写现价")
+            else:
+                st.info("💡 在 requirements.txt 中添加 `yfinance` 后即可启用自动更新现价功能")
+
+            st.markdown("---")
+
             for stock in stocks:
                 col1, col2 = st.columns(2)
                 stored_vals = config_query.get(stock, (0.0, 0.0))
