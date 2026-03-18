@@ -1052,14 +1052,13 @@ elif choice == "📊 实时持仓":
                             )
                         conn.commit()
                         threading.Thread(target=sync_db_to_github, daemon=True).start()
-                        # 刷新本地缓存
-                        raw_prices   = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
-                        config_query = {row[0]: (row[1], row[2]) for row in raw_prices}
                         _detail = "  |  ".join([f"{k} → {v}" for k, v in _fetched.items()])
                         _tip_col.success(f"✅ 已更新 {len(_fetched)} 只：{_detail}")
                         _no_map = [s for s in stocks if s not in TICKER_MAP]
                         if _no_map:
                             _tip_col.warning(f"⚠️ 未配置 Ticker（需手动维护）：{'、'.join(_no_map)}")
+                        # 强制重新加载页面以显示最新数据
+                        st.rerun()
                     else:
                         _tip_col.error("❌ 获取失败，请检查网络后重试，或手动填写现价")
             else:
