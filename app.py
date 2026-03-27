@@ -1234,6 +1234,12 @@ if choice == "🏠 股票详情中心":
             dc1, dc2 = st.columns(2)
             d_content = dc1.text_area("决策内容", placeholder="例如：减仓30%", height=68, label_visibility="visible")
             d_reason  = dc2.text_area("决策原因（可选）", placeholder="为什么做这个决策？", height=68, label_visibility="visible")
+            d_date    = datetime.now()
+            if st.form_submit_button("➕ 记录决策", use_container_width=True):
+                c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
+                          (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
+                conn.commit()
+                st.rerun()
 
         # textarea 自动增高 JS（直接注入主文档，不经过 iframe）
         st.markdown("""<script>
@@ -1261,12 +1267,6 @@ if choice == "🏠 股票详情中心":
             setTimeout(function(){ ob.disconnect(); }, 10000);
         })();
         </script>""", unsafe_allow_html=True)
-            d_date    = datetime.now()
-            if st.form_submit_button("➕ 记录决策", use_container_width=True):
-                c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
-                          (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
-                conn.commit()
-                st.rerun()
 
         decisions = pd.read_sql(
             "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 15",
