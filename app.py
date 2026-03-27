@@ -1590,7 +1590,7 @@ elif choice == "📊 实时持仓":
                     threading.Thread(target=sync_db_to_github, daemon=True).start()
 
         final_raw     = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
-        latest_config = {row[0]: (row[1], row[2]) for row in final_raw}
+        latest_config = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in final_raw}
 
         summary = []
         all_active_records = []
