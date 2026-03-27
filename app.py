@@ -976,13 +976,13 @@ if choice == "🏠 股票详情中心":
                           (_name, _price, _mc))
             conn.commit()
 
-    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
+    latest_prices_data = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
     manual_costs  = {k: v[1] for k, v in latest_prices_data.items()}
 
     if selected_stock:
         s_df   = df_trades[df_trades['code'] == selected_stock].copy()
-        now_p  = latest_prices.get(selected_stock, 0.0)
+        now_p  = latest_prices.get(selected_stock) or 0.0
 
         # ── 盈亏计算 ──
         realized_profit = 0.0
@@ -1754,7 +1754,7 @@ elif choice == "💰 盈利账单":
     _page_title("💰", "盈利账单", "已平仓 + 未平仓")
 
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
-    latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
+    latest_prices_data = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
 
     if not df_trades.empty:
