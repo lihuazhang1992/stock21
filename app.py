@@ -850,12 +850,83 @@ if choice == "🏠 股票详情中心":
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
 
-    # ── 顶部标题 + sticky 股票选择器 ──
-    _title_col, _select_col = st.columns([3, 2])
-    with _title_col:
-        _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
-    with _select_col:
-        selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None, label_visibility="collapsed")
+    # ── 通过 query_params 同步选中股票 ──
+    if all_stocks:
+        if 'stock' in st.query_params and st.query_params['stock'] in all_stocks:
+            selected_stock = st.query_params['stock']
+        else:
+            selected_stock = all_stocks[0]
+    else:
+        selected_stock = None
+
+    # ── 顶部标题（选择器已通过 fixed HTML 实现） ──
+    _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
+
+    # ── 固定在顶部的股票选择器（position: fixed，滚动不消失） ──
+    if all_stocks:
+        current = selected_stock or ""
+        st.html(f"""
+        <div id="__fixed_stock_bar" style="
+            position:fixed; top:0; left:0; right:0; z-index:99999;
+            display:flex; align-items:center; gap:12px;
+            padding:10px 24px 10px calc(280px + 24px);
+            background:rgba(10,14,26,0.95);
+            backdrop-filter:blur(16px);
+            border-bottom:1px solid rgba(99,179,237,0.15);
+            font-family:'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+            box-sizing:border-box;
+        ">
+            <span style="font-size:0.82em;color:#4b5e78;font-weight:600;white-space:nowrap">🔍 切换股票</span>
+            <select id="__fixed_stock_select" style="
+                flex:1; max-width:300px;
+                background:#1e2d40; color:#f0f6ff;
+                border:1px solid rgba(99,179,237,0.30);
+                border-radius:8px; padding:7px 12px;
+                font-size:0.88em; cursor:pointer;
+                outline:none; transition:border 0.18s;
+                font-family:inherit;
+            " onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='rgba(99,179,237,0.30)'">
+                {"".join(f'<option value="{s}"{" selected" if s==current else ""}>{s}</option>' for s in all_stocks)}
+            </select>
+        </div>
+        <script>
+        (function(){{
+            var doc = window.parent.document;
+            var bar = doc.getElementById('__fixed_stock_bar');
+            var sel = doc.getElementById('__fixed_stock_select');
+            // 同步侧边栏宽度
+            function syncSidebar(){{
+                var sb = doc.querySelector('[data-testid="stSidebar"]');
+                if(sb && bar){{
+                    var w = sb.getBoundingClientRect().width;
+                    if(w < 50) w = 0;
+                    bar.style.paddingLeft = (w + 24) + 'px';
+                }}
+                // 给 main 区域加 top padding 避免遮挡
+                var main = doc.querySelector('[data-testid="stMain"]');
+                if(main){{
+                    main.style.paddingTop = '50px';
+                }}
+            }}
+            syncSidebar();
+            setTimeout(syncSidebar, 500);
+            setTimeout(syncSidebar, 1500);
+            // 监听侧边栏展开/收起
+            var sbObs = new MutationObserver(function(){{
+                setTimeout(syncSidebar, 100);
+            }});
+            sbObs.observe(doc.body, {{childList:true, subtree:true, attributes:true}});
+            // 选择器变化 → 更新 URL → 触发 Streamlit rerun
+            if(sel){{
+                sel.addEventListener('change', function(){{
+                    var url = new URL(doc.location.href);
+                    url.searchParams.set('stock', this.value);
+                    doc.location.href = url.toString();
+                }});
+            }}
+        }})();
+        </script>
+        """)
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
@@ -1194,6 +1265,31 @@ if choice == "🏠 股票详情中心":
                           (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
                 conn.commit()
                 st.rerun()
+
+        # ── text_area 自动增高脚本 ──
+        st.html("""<script>
+        (function(){
+            var doc = window.parent.document;
+            function autoGrow(){
+                var areas = doc.querySelectorAll('[data-testid="stForm"] textarea');
+                for(var i=0;i<areas.length;i++){
+                    var ta = areas[i];
+                    ta.style.overflow = 'hidden';
+                    ta.style.minHeight = '44px';
+                    ta.style.height = 'auto';
+                    ta.style.height = Math.max(68, ta.scrollHeight) + 'px';
+                    ta.addEventListener('input', function(){
+                        this.style.height = 'auto';
+                        this.style.height = Math.max(68, this.scrollHeight) + 'px';
+                    });
+                }
+            }
+            setTimeout(autoGrow, 800);
+            setTimeout(autoGrow, 2000);
+            var obs = new MutationObserver(function(){ setTimeout(autoGrow, 300); });
+            obs.observe(doc.body, {childList:true, subtree:true});
+        })();
+        </script>""")
 
         decisions = pd.read_sql(
             "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 15",
