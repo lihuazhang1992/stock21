@@ -1168,19 +1168,21 @@ if choice == "🏠 股票详情中心":
         # ──────────────────────────────────────────────
         with col_strat:
             st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-teal);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-teal)">🧠 交易逻辑 & 参数设置</div>', unsafe_allow_html=True)
-            with st.form("strategy_form"):
+            with st.form(f"strategy_form_{selected_stock}"):
                 new_logic = st.text_area("交易逻辑（买卖原则）", value=saved_logic, height=90,
                                          placeholder="描述该股票的操作策略、买卖原则…",
-                                         label_visibility="collapsed")
-                new_annual = st.number_input("📈 年化收益率 (%)", value=float(saved_annual), step=0.01)
+                                         label_visibility="collapsed",
+                                         key=f"sf_logic_{selected_stock}")
+                new_annual = st.number_input("📈 年化收益率 (%)", value=float(saved_annual), step=0.01,
+                                             key=f"sf_annual_{selected_stock}")
                 st.markdown('<div style="font-size:0.75em;color:var(--accent-green);font-weight:600;margin:6px 0 2px">📥 买入监控参数</div>', unsafe_allow_html=True)
                 bc1, bc2 = st.columns(2)
-                new_buy_base = bc1.number_input("基准价", value=float(s_buy_base), step=0.01, key="sb_buy_base")
-                new_buy_drop = bc2.number_input("下跌 (%)", value=float(s_buy_drop), step=0.1, key="sb_buy_drop")
+                new_buy_base = bc1.number_input("基准价", value=float(s_buy_base), step=0.01, key=f"sf_buy_base_{selected_stock}")
+                new_buy_drop = bc2.number_input("下跌 (%)", value=float(s_buy_drop), step=0.1, key=f"sf_buy_drop_{selected_stock}")
                 st.markdown('<div style="font-size:0.75em;color:var(--accent-red);font-weight:600;margin:6px 0 2px">📤 卖出监控参数</div>', unsafe_allow_html=True)
                 sc1, sc2 = st.columns(2)
-                new_sell_base = sc1.number_input("基准价", value=float(s_sell_base), step=0.01, key="sb_sell_base")
-                new_sell_rise = sc2.number_input("上涨 (%)", value=float(s_sell_rise), step=0.1, key="sb_sell_rise")
+                new_sell_base = sc1.number_input("基准价", value=float(s_sell_base), step=0.01, key=f"sf_sell_base_{selected_stock}")
+                new_sell_rise = sc2.number_input("上涨 (%)", value=float(s_sell_rise), step=0.1, key=f"sf_sell_rise_{selected_stock}")
                 if st.form_submit_button("💾 保存设置", use_container_width=True, type="primary"):
                     c.execute("""
                         INSERT OR REPLACE INTO strategy_notes
@@ -1267,27 +1269,27 @@ if choice == "🏠 股票详情中心":
 
             # 配置表单（折叠）
             with st.expander("⚙️ 修改价格目标配置", expanded=False):
-                with st.form("pt_inline_form"):
+                with st.form(f"pt_inline_form_{selected_stock}"):
                     st.caption("📥 买入体系（高点下跌突破）")
                     pb1, pb2 = st.columns(2)
-                    ni_bhp = pb1.number_input("前期高点", value=float(bhp) if bhp else None, step=0.001, format="%.3f", key="il_buy_high")
-                    ni_bdp = pb2.number_input("下跌幅度(%)", value=float(bdp) if bdp else None, step=0.1, format="%.2f", key="il_buy_drop")
-                    ni_bbs = st.selectbox("买入突破状态", ["未突破","已突破"], index=0 if bbs != '已突破' else 1, key="il_buy_break")
+                    ni_bhp = pb1.number_input("前期高点", value=float(bhp) if bhp else None, step=0.001, format="%.3f", key=f"il_buy_high_{selected_stock}")
+                    ni_bdp = pb2.number_input("下跌幅度(%)", value=float(bdp) if bdp else None, step=0.1, format="%.2f", key=f"il_buy_drop_{selected_stock}")
+                    ni_bbs = st.selectbox("买入突破状态", ["未突破","已突破"], index=0 if bbs != '已突破' else 1, key=f"il_buy_break_{selected_stock}")
                     ni_blb = ni_brb = None
                     if ni_bbs == "已突破":
                         pb3, pb4 = st.columns(2)
-                        ni_blb = pb3.number_input("突破后最低价", value=float(blb) if blb else None, step=0.001, format="%.3f", key="il_buy_low")
-                        ni_brb = pb4.number_input("反弹幅度(%)", value=float(brb), step=0.1, format="%.2f", key="il_buy_reb")
+                        ni_blb = pb3.number_input("突破后最低价", value=float(blb) if blb else None, step=0.001, format="%.3f", key=f"il_buy_low_{selected_stock}")
+                        ni_brb = pb4.number_input("反弹幅度(%)", value=float(brb), step=0.1, format="%.2f", key=f"il_buy_reb_{selected_stock}")
                     st.caption("📤 卖出体系（低点上涨突破）")
                     ps1, ps2 = st.columns(2)
-                    ni_slp = ps1.number_input("前期低点", value=float(slp) if slp else None, step=0.001, format="%.3f", key="il_sell_low")
-                    ni_srp = ps2.number_input("上涨幅度(%)", value=float(srp) if srp else None, step=0.1, format="%.2f", key="il_sell_rise")
-                    ni_sbs = st.selectbox("卖出突破状态", ["未突破","已突破"], index=0 if sbs != '已突破' else 1, key="il_sell_break")
+                    ni_slp = ps1.number_input("前期低点", value=float(slp) if slp else None, step=0.001, format="%.3f", key=f"il_sell_low_{selected_stock}")
+                    ni_srp = ps2.number_input("上涨幅度(%)", value=float(srp) if srp else None, step=0.1, format="%.2f", key=f"il_sell_rise_{selected_stock}")
+                    ni_sbs = st.selectbox("卖出突破状态", ["未突破","已突破"], index=0 if sbs != '已突破' else 1, key=f"il_sell_break_{selected_stock}")
                     ni_shb = ni_sfb = None
                     if ni_sbs == "已突破":
                         ps3, ps4 = st.columns(2)
-                        ni_shb = ps3.number_input("突破后最高价", value=float(shb) if shb else None, step=0.001, format="%.3f", key="il_sell_high")
-                        ni_sfb = ps4.number_input("回落幅度(%)", value=float(sfb), step=0.1, format="%.2f", key="il_sell_fall")
+                        ni_shb = ps3.number_input("突破后最高价", value=float(shb) if shb else None, step=0.001, format="%.3f", key=f"il_sell_high_{selected_stock}")
+                        ni_sfb = ps4.number_input("回落幅度(%)", value=float(sfb), step=0.1, format="%.2f", key=f"il_sell_fall_{selected_stock}")
                     if st.form_submit_button("💾 保存价格目标", use_container_width=True):
                         c.execute("""INSERT OR REPLACE INTO price_targets_v2
                             (code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, buy_rebound_pct,
