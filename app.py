@@ -847,10 +847,15 @@ def _page_title(icon, title, subtitle=""):
 #  🏠 股票详情中心（一体化视图）
 # =====================================================================
 if choice == "🏠 股票详情中心":
-    _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
-
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
+
+    # ── 顶部标题 + 股票选择器（同行，下拉不遮挡数据） ──
+    _title_col, _select_col = st.columns([3, 2])
+    with _title_col:
+        _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
+    with _select_col:
+        selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None, label_visibility="collapsed")
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
@@ -866,8 +871,6 @@ if choice == "🏠 股票详情中心":
     latest_prices_data = {row[0]: (row[1], row[2]) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
     manual_costs  = {k: v[1] for k, v in latest_prices_data.items()}
-
-    selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None)
 
     if selected_stock:
         s_df   = df_trades[df_trades['code'] == selected_stock].copy()
