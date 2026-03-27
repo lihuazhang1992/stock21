@@ -686,6 +686,22 @@ div[data-testid="stCustomComponentV1"] {
     transition: all var(--transition);
 }
 .decision-card:hover { border-color: var(--border-hover); }
+
+/* ─── textarea 自动增高：field-sizing ─── */
+.stTextArea textarea {
+    field-sizing: content !important;
+    min-height: 68px !important;
+}
+/* ─── 股票选择器 sticky ─── */
+.sticky-stock-sel [data-testid="stVerticalBlock"] {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1000 !important;
+    background: var(--bg-base) !important;
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+    margin-bottom: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -864,60 +880,28 @@ if choice == "🏠 股票详情中心":
     else:
         selected_stock = None
 
-    # ── 顶部标题（选择器已通过 fixed HTML 实现） ──
+    # ── 顶部标题 ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定在右上角的股票选择器（components.html 注入JS到父文档） ──
+    # ── 固定的股票选择器（st.selectbox + CSS sticky） ──
     if all_stocks:
-        current = selected_stock or ""
-        _opts_js = "\n".join(f'  o.appendChild(new Option("{s}","{s}"));' for s in all_stocks)
-        _opts_js += f'\n  o.value = "{current}";'
-        components.html(f"""<script>
-        (function(){{
-            var doc = window.parent.document;
-            var old = doc.getElementById('__fsb_wrap');
-            if(old) old.remove();
+        def _on_stock_change():
+            st.query_params['stock'] = st.session_state['_stock_sel']
+            st.rerun()
 
-            var wrap = doc.createElement('div');
-            wrap.id = '__fsb_wrap';
-            wrap.style.cssText = 'position:fixed;top:10px;right:16px;z-index:99999;display:flex;align-items:center;gap:8px;background:rgba(10,14,26,0.92);backdrop-filter:blur(16px);border:1px solid rgba(99,179,237,0.25);border-radius:10px;padding:6px 14px 6px 10px;font-family:Inter,PingFang SC,Microsoft YaHei,system-ui,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,0.35);transition:right 0.3s ease;';
-
-            var lbl = doc.createElement('span');
-            lbl.textContent = "\U0001f50d";
-            lbl.style.cssText = 'font-size:0.78em;color:#4b5e78;font-weight:600;white-space:nowrap;';
-            wrap.appendChild(lbl);
-
-            var o = doc.createElement('select');
-            o.id = '__fsb_sel';
-            o.style.cssText = 'background:#1e2d40;color:#f0f6ff;border:1px solid rgba(99,179,237,0.25);border-radius:6px;padding:5px 10px;font-size:0.85em;cursor:pointer;outline:none;transition:border 0.18s;font-family:inherit;min-width:100px;';
-            o.onfocus = function(){{ this.style.borderColor='#3b82f6'; }};
-            o.onblur  = function(){{ this.style.borderColor='rgba(99,179,237,0.25)'; }};
-            wrap.appendChild(o);
-
-            doc.body.appendChild(wrap);
-
-            {_opts_js}
-
-            o.addEventListener('change', function(){{
-                var url = new URL(doc.location.href);
-                url.searchParams.set('stock', this.value);
-                doc.location.href = url.toString();
-            }});
-
-            function syncSidebar(){{
-                var sb = doc.querySelector('[data-testid="stSidebar"]');
-                if(sb){{
-                    var w = sb.getBoundingClientRect().width;
-                    wrap.style.right = (w > 50 ? (w - 280 + 16) : 16) + 'px';
-                }}
-            }}
-            syncSidebar();
-            setTimeout(syncSidebar, 500);
-            setTimeout(syncSidebar, 1500);
-            var sbObs = new MutationObserver(function(){{ setTimeout(syncSidebar, 100); }});
-            sbObs.observe(doc.body, {{childList:true, subtree:true, attributes:true}});
-        }})();
-        </script>""", height=0)
+        st.markdown('<div class="sticky-stock-sel">', unsafe_allow_html=True)
+        _sel_col1, _sel_col2 = st.columns([1, 3])
+        with _sel_col1:
+            st.selectbox(
+                "🔍 切换股票", all_stocks,
+                index=all_stocks.index(selected_stock) if selected_stock in all_stocks else 0,
+                key='_stock_sel',
+                on_change=_on_stock_change,
+                label_visibility="visible"
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        selected_stock = None
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
@@ -1250,48 +1234,39 @@ if choice == "🏠 股票详情中心":
             dc1, dc2 = st.columns(2)
             d_content = dc1.text_area("决策内容", placeholder="例如：减仓30%", height=68, label_visibility="visible")
             d_reason  = dc2.text_area("决策原因（可选）", placeholder="为什么做这个决策？", height=68, label_visibility="visible")
+
+        # textarea 自动增高 JS（直接注入主文档，不经过 iframe）
+        st.markdown("""<script>
+        (function(){
+            function grow(){
+                document.querySelectorAll('textarea').forEach(function(ta){
+                    if(ta.dataset.autogrow) return;
+                    ta.dataset.autogrow = '1';
+                    ta.style.minHeight = '68px';
+                    ta.style.overflow = 'hidden';
+                    function fit(){
+                        ta.style.height = 'auto';
+                        ta.style.height = Math.max(68, ta.scrollHeight) + 'px';
+                    }
+                    fit();
+                    ta.addEventListener('input', fit);
+                });
+            }
+            grow();
+            setTimeout(grow, 500);
+            setTimeout(grow, 1500);
+            setTimeout(grow, 3000);
+            var ob = new MutationObserver(function(){ setTimeout(grow, 200); });
+            ob.observe(document.body, {childList:true, subtree:true});
+            setTimeout(function(){ ob.disconnect(); }, 10000);
+        })();
+        </script>""", unsafe_allow_html=True)
             d_date    = datetime.now()
             if st.form_submit_button("➕ 记录决策", use_container_width=True):
                 c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
                           (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
                 conn.commit()
                 st.rerun()
-
-        # ── text_area 自动增高脚本 ──
-        components.html("""<script>
-        (function(){
-            var doc = window.parent.document;
-            var _done = new WeakSet();
-            function growOne(ta){
-                if(_done.has(ta)) return;
-                _done.add(ta);
-                function doGrow(){
-                    ta.style.height = '0px';
-                    var h = Math.max(68, ta.scrollHeight + 4);
-                    ta.style.height = h + 'px';
-                }
-                ta.style.minHeight = '68px';
-                setTimeout(doGrow, 300);
-                ta.addEventListener('input', doGrow);
-            }
-            function autoGrow(){
-                var forms = doc.querySelectorAll('[data-testid="stForm"]');
-                for(var fi = 0; fi < forms.length; fi++){
-                    var tas = forms[fi].querySelectorAll('textarea');
-                    for(var ti = 0; ti < tas.length; ti++){
-                        growOne(tas[ti]);
-                    }
-                }
-            }
-            var delays = [500, 1000, 2000, 4000];
-            for(var d = 0; d < delays.length; d++){
-                (function(delay){ setTimeout(autoGrow, delay); })(delays[d]);
-            }
-            var obs = new MutationObserver(function(){ setTimeout(autoGrow, 200); });
-            obs.observe(doc.body, {childList:true, subtree:true});
-            setTimeout(function(){ obs.disconnect(); }, 15000);
-        })();
-        </script>""", height=0)
 
         decisions = pd.read_sql(
             "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 15",
