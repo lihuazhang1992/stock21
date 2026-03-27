@@ -434,11 +434,21 @@ hr, .stDivider { border-color: var(--border) !important; margin: 1rem 0 !importa
     border-radius: var(--radius-sm) !important;
     font-size: 0.90em !important;
     transition: all var(--transition) !important;
+    caret-color: var(--accent-teal) !important;
 }
 .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
     border-color: var(--accent-blue) !important;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.15) !important;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.25) !important;
     outline: none !important;
+    caret-color: var(--accent-teal) !important;
+}
+/* 输入框光标闪烁动画增强 */
+@keyframes blink-caret {
+    0%, 100% { border-color: var(--accent-teal); }
+    50%       { border-color: transparent; }
+}
+input:focus, textarea:focus {
+    caret-color: var(--accent-teal) !important;
 }
 .stTextInput label, .stNumberInput label, .stTextArea label,
 .stSelectbox label, .stDateInput label {
@@ -806,7 +816,7 @@ st.sidebar.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-menu = ["📈 策略复盘", "📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
+menu = ["🏠 股票详情中心", "📊 实时持仓", "💰 盈利账单", "🎯 价格目标管理", "📝 交易录入", "🔔 买卖信号", "📜 历史明细", "📓 复盘日记"]
 choice = st.sidebar.radio("功能导航", menu, label_visibility="collapsed")
 
 # ─── 辅助函数 ───
@@ -834,10 +844,10 @@ def _page_title(icon, title, subtitle=""):
     )
 
 # =====================================================================
-#  📈 策略复盘
+#  🏠 股票详情中心（一体化视图）
 # =====================================================================
-if choice == "📈 策略复盘":
-    _page_title("📈", "策略复盘", "深度账本 & 逻辑管理")
+if choice == "🏠 股票详情中心":
+    _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
@@ -851,6 +861,7 @@ if choice == "📈 策略复盘":
         s_df   = df_trades[df_trades['code'] == selected_stock].copy()
         now_p  = latest_prices.get(selected_stock, 0.0)
 
+        # ── 盈亏计算 ──
         realized_profit = 0.0
         max_occupied_amount = 0.0
         buy_pool  = []
@@ -932,7 +943,9 @@ if choice == "📈 策略复盘":
         b_color = "var(--profit)" if is_buy_triggered  else "var(--text-secondary)"
         s_color = "var(--loss)"   if is_sell_triggered else "var(--text-secondary)"
 
-        # ── 核心数据卡片网格 ──
+        # ═══════════════════════════════════════════════
+        # 第一行：核心数据卡片（12格网格）
+        # ═══════════════════════════════════════════════
         st.markdown(f'<div style="margin-bottom:6px;font-size:0.80em;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">📊 {selected_stock} · 核心数据</div>', unsafe_allow_html=True)
 
         row1 = [
@@ -960,14 +973,22 @@ if choice == "📈 策略复盘":
 
         st.divider()
 
-        col_left, col_right = st.columns([3, 2], gap="large")
+        # ═══════════════════════════════════════════════
+        # 第二行：3栏布局
+        #   左栏(3/8)：交易逻辑 + 参数设置
+        #   中栏(3/8)：价格目标监控 + 买卖信号
+        #   右栏(2/8)：决策历史
+        # ═══════════════════════════════════════════════
+        col_L, col_M, col_R = st.columns([3, 3, 2], gap="medium")
 
-        with col_left:
-            st.markdown('<div style="font-size:0.95em;font-weight:700;color:var(--text-primary);margin-bottom:10px">🧠 交易逻辑 & 参数设置</div>', unsafe_allow_html=True)
+        # ──────────────────────────────────────────────
+        # 左栏：交易逻辑 & 参数设置
+        # ──────────────────────────────────────────────
+        with col_L:
+            st.markdown('<div style="font-size:0.88em;font-weight:700;color:var(--accent-teal);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)">🧠 交易逻辑 & 参数设置</div>', unsafe_allow_html=True)
             with st.form("strategy_form"):
-                new_logic  = st.text_area("交易逻辑（买卖原则）", value=saved_logic, height=96)
-                col_annual, _ = st.columns([1, 1])
-                new_annual = col_annual.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
+                new_logic  = st.text_area("交易逻辑（买卖原则）", value=saved_logic, height=80)
+                new_annual = st.number_input("历史平均年化收益率 (%)", value=float(saved_annual), step=0.01)
                 st.caption("📥 买入监控")
                 c_buy1, c_buy2 = st.columns(2)
                 new_buy_base = c_buy1.number_input("买入基准价", value=float(s_buy_base), step=0.01)
@@ -987,13 +1008,173 @@ if choice == "📈 策略复盘":
                     st.success("✅ 已保存")
                     st.rerun()
 
-        with col_right:
-            st.markdown('<div style="font-size:0.95em;font-weight:700;color:var(--text-primary);margin-bottom:10px">📜 决策历史</div>', unsafe_allow_html=True)
+        # ──────────────────────────────────────────────
+        # 中栏：价格目标监控 + 买卖信号
+        # ──────────────────────────────────────────────
+        with col_M:
+            # ── 价格目标 ──
+            st.markdown('<div style="font-size:0.88em;font-weight:700;color:var(--accent-blue);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)">🎯 价格目标监控</div>', unsafe_allow_html=True)
+
+            def ensure_price_target_v2_table_inline():
+                c.execute("""CREATE TABLE IF NOT EXISTS price_targets_v2 (
+                    code TEXT PRIMARY KEY, buy_high_point REAL, buy_drop_pct REAL,
+                    buy_break_status TEXT DEFAULT '未突破', buy_low_after_break REAL,
+                    buy_rebound_pct REAL DEFAULT 0.0, sell_low_point REAL, sell_rise_pct REAL,
+                    sell_break_status TEXT DEFAULT '未突破', sell_high_after_break REAL,
+                    sell_fallback_pct REAL DEFAULT 0.0, last_updated TEXT)""")
+                for col_sql in ["ALTER TABLE price_targets_v2 ADD COLUMN buy_rebound_pct REAL DEFAULT 0.0",
+                            "ALTER TABLE price_targets_v2 ADD COLUMN sell_fallback_pct REAL DEFAULT 0.0"]:
+                    try: c.execute(col_sql)
+                    except: pass
+                conn.commit()
+
+            ensure_price_target_v2_table_inline()
+
+            pt_row = c.execute('SELECT * FROM price_targets_v2 WHERE code = ?', (selected_stock,)).fetchone()
+            pt_cfg = {}
+            if pt_row:
+                cols_pt = [d[0] for d in c.description]
+                pt_cfg  = dict(zip(cols_pt, pt_row))
+
+            # 快速显示价格目标状态
+            bhp  = pt_cfg.get('buy_high_point')
+            bdp  = pt_cfg.get('buy_drop_pct')
+            bbs  = pt_cfg.get('buy_break_status', '未突破')
+            blb  = pt_cfg.get('buy_low_after_break')
+            brb  = pt_cfg.get('buy_rebound_pct', 0.0) or 0.0
+            slp  = pt_cfg.get('sell_low_point')
+            srp  = pt_cfg.get('sell_rise_pct')
+            sbs  = pt_cfg.get('sell_break_status', '未突破')
+            shb  = pt_cfg.get('sell_high_after_break')
+            sfb  = pt_cfg.get('sell_fallback_pct', 0.0) or 0.0
+
+            def _pt_status_card(label, base_p, target_p, curr_p, break_status, color):
+                if not base_p:
+                    return f'<div style="background:var(--bg-elevated);border-radius:8px;padding:10px 14px;margin-bottom:8px;border:1px solid var(--border);font-size:0.85em;color:var(--text-muted)">暂未配置{label}目标</div>'
+                dist_pct = round((target_p - curr_p) / curr_p * 100, 2) if curr_p > 0 and target_p else None
+                dist_str = f"差 {dist_pct:.2f}%" if dist_pct is not None else "—"
+                bs_icon  = "🟢" if break_status == '已突破' else "⏳"
+                tgt_str  = f"{target_p:.3f}" if target_p else f"{base_p:.3f}"
+                return f'''<div style="background:var(--bg-elevated);border-left:3px solid {color};border-radius:0 8px 8px 0;
+                    padding:10px 14px;margin-bottom:8px">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span style="color:{color};font-weight:700;font-size:0.88em">{label}</span>
+                        <span style="font-size:0.78em;color:var(--text-muted)">{bs_icon} {break_status}</span>
+                    </div>
+                    <div style="display:flex;gap:16px;margin-top:6px">
+                        <div><div style="font-size:0.72em;color:var(--text-muted)">目标价</div>
+                             <div style="font-size:1.05em;font-weight:700;color:#f0f6ff">{tgt_str}</div></div>
+                        <div><div style="font-size:0.72em;color:var(--text-muted)">基准价</div>
+                             <div style="font-size:0.90em;color:var(--text-secondary)">{base_p:.3f}</div></div>
+                        <div><div style="font-size:0.72em;color:var(--text-muted)">距目标</div>
+                             <div style="font-size:0.88em;font-weight:600;color:#fbbf24">{dist_str}</div></div>
+                    </div>
+                </div>'''
+
+            buy_base_p  = round(bhp * (1 - bdp / 100), 3)  if bhp and bdp  else None
+            buy_tgt_p   = round(blb * (1 + brb / 100), 3)  if blb and bbs == '已突破' else buy_base_p
+            sell_base_p = round(slp * (1 + srp / 100), 3)  if slp and srp  else None
+            sell_tgt_p  = round(shb * (1 - sfb / 100), 3)  if shb and sbs == '已突破' else sell_base_p
+
+            st.markdown(
+                _pt_status_card("📥 买入目标", buy_base_p, buy_tgt_p, now_p, bbs, "#10b981") +
+                _pt_status_card("📤 卖出目标", sell_base_p, sell_tgt_p, now_p, sbs, "#f43f5e"),
+                unsafe_allow_html=True
+            )
+
+            with st.expander("⚙️ 修改价格目标配置", expanded=False):
+                with st.form("pt_inline_form"):
+                    st.caption("📥 买入体系（高点下跌突破）")
+                    pb1, pb2 = st.columns(2)
+                    ni_bhp = pb1.number_input("前期高点", value=float(bhp) if bhp else None, step=0.001, format="%.3f", key="il_buy_high")
+                    ni_bdp = pb2.number_input("下跌幅度(%)", value=float(bdp) if bdp else None, step=0.1, format="%.2f", key="il_buy_drop")
+                    ni_bbs = st.selectbox("买入突破状态", ["未突破","已突破"], index=0 if bbs != '已突破' else 1, key="il_buy_break")
+                    ni_blb = ni_brb = None
+                    if ni_bbs == "已突破":
+                        pb3, pb4 = st.columns(2)
+                        ni_blb = pb3.number_input("突破后最低价", value=float(blb) if blb else None, step=0.001, format="%.3f", key="il_buy_low")
+                        ni_brb = pb4.number_input("反弹幅度(%)", value=float(brb), step=0.1, format="%.2f", key="il_buy_reb")
+                    st.caption("📤 卖出体系（低点上涨突破）")
+                    ps1, ps2 = st.columns(2)
+                    ni_slp = ps1.number_input("前期低点", value=float(slp) if slp else None, step=0.001, format="%.3f", key="il_sell_low")
+                    ni_srp = ps2.number_input("上涨幅度(%)", value=float(srp) if srp else None, step=0.1, format="%.2f", key="il_sell_rise")
+                    ni_sbs = st.selectbox("卖出突破状态", ["未突破","已突破"], index=0 if sbs != '已突破' else 1, key="il_sell_break")
+                    ni_shb = ni_sfb = None
+                    if ni_sbs == "已突破":
+                        ps3, ps4 = st.columns(2)
+                        ni_shb = ps3.number_input("突破后最高价", value=float(shb) if shb else None, step=0.001, format="%.3f", key="il_sell_high")
+                        ni_sfb = ps4.number_input("回落幅度(%)", value=float(sfb), step=0.1, format="%.2f", key="il_sell_fall")
+                    if st.form_submit_button("💾 保存价格目标", use_container_width=True):
+                        c.execute("""INSERT OR REPLACE INTO price_targets_v2
+                            (code, buy_high_point, buy_drop_pct, buy_break_status, buy_low_after_break, buy_rebound_pct,
+                             sell_low_point, sell_rise_pct, sell_break_status, sell_high_after_break, sell_fallback_pct, last_updated)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (selected_stock, ni_bhp, ni_bdp, ni_bbs, ni_blb, ni_brb or 0.0,
+                             ni_slp, ni_srp, ni_sbs, ni_shb, ni_sfb or 0.0,
+                             datetime.now().strftime('%Y-%m-%d %H:%M')))
+                        conn.commit()
+                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        st.success("✅ 已保存")
+                        st.rerun()
+
+            st.divider()
+
+            # ── 买卖信号 ──
+            st.markdown('<div style="font-size:0.88em;font-weight:700;color:var(--accent-amber);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)">🔔 买卖信号</div>', unsafe_allow_html=True)
+            sig_row = c.execute(
+                "SELECT high_point, low_point, up_threshold, down_threshold, high_date, low_date FROM signals WHERE code = ?",
+                (selected_stock,)
+            ).fetchone()
+
+            if sig_row:
+                s_high_pt, s_low_pt, s_up_th, s_down_th, s_h_date, s_l_date = sig_row
+                prices_map_s = {selected_stock: now_p}
+                dr = ((now_p - s_high_pt) / s_high_pt * 100) if s_high_pt > 0 else 0
+                rr = ((now_p - s_low_pt)  / s_low_pt  * 100) if s_low_pt  > 0 else 0
+                if rr >= s_up_th:
+                    sig_badge = f'<span class="badge badge-sell">🟢 建议卖出</span>'
+                    sig_bg = "rgba(244,63,94,0.08)"
+                elif dr <= -s_down_th:
+                    sig_badge = f'<span class="badge badge-buy">🔴 建议买入</span>'
+                    sig_bg = "rgba(16,185,129,0.08)"
+                else:
+                    sig_badge = f'<span class="badge badge-hold">⚖️ 观望</span>'
+                    sig_bg = "rgba(245,158,11,0.08)"
+                dr_cls = "profit-red" if dr >= 0 else "loss-green"
+                rr_cls = "profit-red" if rr >= 0 else "loss-green"
+                st.markdown(f'''
+                <div style="background:{sig_bg};border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                        <span style="font-size:0.85em;color:var(--text-secondary)">信号状态</span>
+                        {sig_badge}
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-size:0.82em">
+                        <div><div style="color:var(--text-muted)">高点</div>
+                             <div style="font-weight:600">{s_high_pt}</div>
+                             <div style="color:var(--text-muted);font-size:0.85em">{s_h_date}</div></div>
+                        <div><div style="color:var(--text-muted)">低点</div>
+                             <div style="font-weight:600">{s_low_pt}</div>
+                             <div style="color:var(--text-muted);font-size:0.85em">{s_l_date}</div></div>
+                        <div><div style="color:var(--text-muted)">距高点</div>
+                             <div class="{dr_cls}" style="font-weight:600">{dr:.2f}%</div></div>
+                        <div><div style="color:var(--text-muted)">距低点</div>
+                             <div class="{rr_cls}" style="font-weight:600">{rr:.2f}%</div></div>
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:var(--text-muted);font-size:0.85em;padding:10px;background:var(--bg-elevated);border-radius:8px;text-align:center">暂无买卖信号，可到「🔔 买卖信号」页面配置</div>', unsafe_allow_html=True)
+
+        # ──────────────────────────────────────────────
+        # 右栏：决策历史
+        # ──────────────────────────────────────────────
+        with col_R:
+            st.markdown('<div style="font-size:0.88em;font-weight:700;color:var(--accent-purple);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)">📜 决策历史</div>', unsafe_allow_html=True)
             with st.form("new_decision", clear_on_submit=True):
                 dcols = st.columns([1, 2])
                 d_date    = dcols[0].date_input("日期", datetime.now())
                 d_content = dcols[1].text_input("决策内容", placeholder="例如：减仓30%")
-                d_reason  = st.text_area("决策原因", placeholder="为什么做这个决策？", height=60)
+                d_reason  = st.text_area("决策原因", placeholder="为什么做这个决策？", height=56)
                 if st.form_submit_button("➕ 记录决策", use_container_width=True):
                     c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
                               (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
@@ -1021,6 +1202,54 @@ if choice == "📈 策略复盘":
                         c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
                         conn.commit()
                         st.rerun()
+
+        st.divider()
+
+        # ═══════════════════════════════════════════════
+        # 第三行：复盘日记（底部，可折叠）
+        # ═══════════════════════════════════════════════
+        with st.expander(f"📓 {selected_stock} 复盘日记", expanded=False):
+            st.caption("🎨 支持 HTML 颜色标签，如 <span style='color:#f59e0b'>重点文字</span>")
+            jcol1, jcol2 = st.columns([4, 1])
+            new_journal_content = jcol1.text_area("写新日记", height=80, placeholder="支持换行、列表、空格等格式……", label_visibility="collapsed")
+            if jcol2.button("📌 存档", type="primary", use_container_width=True):
+                if new_journal_content.strip():
+                    c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
+                              (datetime.now().strftime('%Y-%m-%d'), selected_stock, new_journal_content.strip()))
+                    conn.commit()
+                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    st.success("✅ 已存档")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ 请填写内容")
+
+            journal_rows = pd.read_sql(
+                "SELECT id, date, stock_name, content FROM journal WHERE stock_name = ? ORDER BY date DESC, id DESC",
+                conn, params=(selected_stock,)
+            )
+            if journal_rows.empty:
+                st.info(f"📌 暂无「{selected_stock}」复盘记录")
+            else:
+                for _, jrow in journal_rows.iterrows():
+                    jc1, jc2 = st.columns([12, 1])
+                    with jc1:
+                        st.markdown(
+                            f'<div class="journal-card">'
+                            f'<div class="journal-meta">'
+                            f'<span style="background:rgba(59,130,246,0.15);color:var(--accent-blue);border-radius:4px;padding:1px 8px;font-weight:600">{jrow["stock_name"]}</span>'
+                            f'<span>{jrow["date"]}</span>'
+                            f'</div>'
+                            f'<div class="journal-content">{jrow["content"]}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+                    with jc2:
+                        if st.button("✕", key=f"jdel_{jrow['id']}", help="删除"):
+                            c.execute("DELETE FROM journal WHERE id = ?", (jrow['id'],))
+                            conn.commit()
+                            threading.Thread(target=sync_db_to_github, daemon=True).start()
+                            st.rerun()
+
     else:
         st.info("💡 请先在交易录入中添加股票数据")
 
