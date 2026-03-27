@@ -14,47 +14,130 @@ try:
 except ImportError:
     _YF_OK = False
 
-# ── 股票名称 → yfinance Ticker 映射 ──
-# 港股后缀 .HK，A股上交所 .SS / 深交所 .SZ，美股直接代码
-# 如需新增持仓股票，在此表里追加一行即可
+# ── 股票名称 → 东方财富 secid 映射（内置兜底表）──
+# 东方财富 secid 格式：市场前缀.代码
+#   A股 沪市(上交所) → 1.xxxxxx
+#   A股 深市(深交所) → 0.xxxxxx
+#   港股            → 116.xxxxx（5位，不足补0）
+#   美股            → 105.XXXX
+# 数据库 stock_info 中用户录入的代码优先，此表仅作兜底
 TICKER_MAP = {
     # 港股
+    "中芯国际":  "116.00981",
+    "汇丰控股":  "116.00005",
+    "中银香港":  "116.02388",
+    "紫金矿业":  "116.02899",
+    "电能实业":  "116.00006",
+    "福耀玻璃":  "116.03606",
+    # A股 深市
+    "比亚迪":    "0.002594",
+    "阳光电源":  "0.300274",
+    "纳指ETF":   "0.159941",
+    # A股 沪市
+    "长江电力":  "1.600900",
+    # 美股
+    "联合健康":  "105.UNH",
+    "特斯拉":    "105.TSLA",
+    "伯克希尔":  "105.BRK-B",
+}
+
+# yfinance ticker（用于降级回退，stock_info 里存的是东方财富 secid）
+_YF_FALLBACK = {
     "中芯国际":  "0981.HK",
-    "比亚迪":    "002594.SZ",
     "汇丰控股":  "0005.HK",
     "中银香港":  "2388.HK",
     "紫金矿业":  "2899.HK",
     "电能实业":  "0006.HK",
-    "福耀玻璃":  "3606.HK",  # 港股
-    # A股
+    "福耀玻璃":  "3606.HK",
+    "比亚迪":    "002594.SZ",
     "阳光电源":  "300274.SZ",
     "长江电力":  "600900.SS",
-    "纳指ETF":   "159941.SZ", # A股深交所纳指ETF
-    # 美股
+    "纳指ETF":   "159941.SZ",
     "联合健康":  "UNH",
     "特斯拉":    "TSLA",
     "伯克希尔":  "BRK-B",
 }
 
+def _build_ticker_map() -> dict:
+    """合并数据库用户录入代码（优先）和内置 TICKER_MAP（兜底）"""
+    merged = dict(TICKER_MAP)
+    try:
+        rows = conn.execute(
+            "SELECT stock_name, stock_code FROM stock_info WHERE stock_code IS NOT NULL AND stock_code != ''"
+        ).fetchall()
+        for name, code in rows:
+            merged[name] = code  # 用户录入的覆盖内置
+    except Exception:
+        pass
+    return merged
+
+def _fetch_eastmoney(secids: list) -> dict:
+    """
+    东方财富批量行情接口，延迟约 3~10 秒。
+    secids: ['1.600900', '0.002594', '116.00981', '105.TSLA', ...]
+    返回 {secid: 最新价(float)}
+    """
+    import urllib.request, json
+    if not secids:
+        return {}
+    fields = "f2,f12"   # f2=最新价(×100需除以100), f12=代码
+    url = (
+        "https://push2.eastmoney.com/api/qt/ulist.np/get"
+        f"?fltt=2&invt=2&fields={fields}&secids={','.join(secids)}"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        items = (data.get("data") or {}).get("diff") or []
+        result = {}
+        for item in items:
+            price = item.get("f2")
+            code  = str(item.get("f12", ""))
+            if price and price != "-" and code:
+                result[code] = round(float(price), 4)
+        return result
+    except Exception:
+        return {}
+
 def fetch_latest_prices(stock_names: list) -> dict:
     """
-    通过 yfinance 批量拉取最新收盘价。
-    返回 {股票名称: 最新价(float)}，失败的股票不包含在结果中。
+    批量拉取最新价，优先东方财富接口（低延迟），失败时回退 yfinance。
+    返回 {股票名称: 最新价(float)}
     """
-    if not _YF_OK:
-        return {}
+    ticker_map = _build_ticker_map()
     result = {}
+
+    # ── 第一步：东方财富批量请求 ──
+    secid_to_name = {}
     for name in stock_names:
-        ticker_code = TICKER_MAP.get(name)
-        if not ticker_code:
-            continue
-        try:
-            hist = yf.Ticker(ticker_code).history(period="2d")
-            if not hist.empty:
-                result[name] = round(float(hist["Close"].iloc[-1]), 4)
-        except Exception:
-            pass
+        secid = ticker_map.get(name)
+        if secid:
+            code_part = secid.split(".", 1)[-1]   # "1.600900" → "600900"
+            secid_to_name[code_part] = (name, secid)
+
+    if secid_to_name:
+        em_result = _fetch_eastmoney([v[1] for v in secid_to_name.values()])
+        for code_part, (name, _) in secid_to_name.items():
+            if code_part in em_result:
+                result[name] = em_result[code_part]
+
+    # ── 第二步：东方财富未能拿到的，用 yfinance 兜底 ──
+    missing = [n for n in stock_names if n not in result]
+    if missing and _YF_OK:
+        for name in missing:
+            yf_ticker = _YF_FALLBACK.get(name)
+            if not yf_ticker:
+                continue
+            try:
+                hist = yf.Ticker(yf_ticker).history(period="2d")
+                if not hist.empty:
+                    result[name] = round(float(hist["Close"].iloc[-1]), 4)
+            except Exception:
+                pass
+
     return result
+
 
 # ============== 自动备份 GitHub ==============
 DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
@@ -160,6 +243,14 @@ for col_sql in [
 c.execute('''CREATE TABLE IF NOT EXISTS price_targets (
     code TEXT PRIMARY KEY, base_price REAL DEFAULT 0.0, buy_target REAL DEFAULT 0.0,
     sell_target REAL DEFAULT 0.0, last_updated TEXT)''')
+conn.commit()
+
+# ── 将内置 TICKER_MAP 初始化写入 stock_info（INSERT OR IGNORE，不覆盖用户已录入的）──
+for _name, _code in TICKER_MAP.items():
+    try:
+        c.execute("INSERT OR IGNORE INTO stock_info (stock_name, stock_code) VALUES (?, ?)", (_name, _code))
+    except Exception:
+        pass
 conn.commit()
 
 thread = threading.Thread(target=sync_db_to_github, daemon=True)
@@ -2177,7 +2268,18 @@ elif choice == "📝 交易录入":
 
     full_list  = get_dynamic_stock_list()
     t_code     = st.selectbox("选择股票", options=["【添加新股票】"] + full_list, index=None)
-    final_code = st.text_input("新股票名称（必填）") if t_code == "【添加新股票】" else t_code
+
+    # 添加新股票时额外要求填写 ticker 代码
+    if t_code == "【添加新股票】":
+        _nc1, _nc2 = st.columns(2)
+        final_code     = _nc1.text_input("新股票名称（必填）", placeholder="例如：腾讯控股")
+        new_ticker_inp = _nc2.text_input(
+            "股票代码（必填，用于自动获取价格）",
+            placeholder="沪市: 1.600900  深市: 0.002594  港股: 116.00981  美股: 105.AAPL",
+        )
+    else:
+        final_code     = t_code
+        new_ticker_inp = None
 
     with st.form("trade_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -2191,11 +2293,22 @@ elif choice == "📝 交易录入":
         if submitted:
             if not final_code:
                 st.error("❌ 请填写或选择股票")
+            elif t_code == "【添加新股票】" and not new_ticker_inp:
+                st.error("❌ 添加新股票时请填写股票代码（用于自动获取价格）")
             elif p is None or q is None:
                 st.error("❌ 请填写单价和数量")
             else:
                 c.execute("INSERT INTO trades (date, code, action, price, quantity, note) VALUES (?,?,?,?,?,?)",
                           (d.strftime('%Y-%m-%d'), final_code, a, p, q, note.strip() or None))
+                # 若是新股票，同步写入 stock_info（含 ticker 代码）
+                if t_code == "【添加新股票】" and new_ticker_inp:
+                    try:
+                        c.execute(
+                            "INSERT OR IGNORE INTO stock_info (stock_name, stock_code) VALUES (?, ?)",
+                            (final_code.strip(), new_ticker_inp.strip()),
+                        )
+                    except Exception:
+                        pass
                 conn.commit()
                 threading.Thread(target=sync_db_to_github, daemon=True).start()
                 st.success(f"✅ 已保存：{final_code} {a} {q}股 @ {p}")
@@ -2516,7 +2629,7 @@ elif choice == "📝 交易录入":
     # 添加新股票
     with st.form("add_stock_form", clear_on_submit=True):
         new_stock_name = st.text_input("股票名称", placeholder="例如：中芯国际")
-        new_stock_code = st.text_input("股票代码", placeholder="例如：0981.HK")
+        new_stock_code = st.text_input("股票代码（secid格式）", placeholder="沪市: 1.600900  深市: 0.002594  港股: 116.00981  美股: 105.AAPL")
         submitted = st.form_submit_button("➕ 添加股票", type="primary", use_container_width=True)
 
         if submitted and new_stock_name and new_stock_code:
