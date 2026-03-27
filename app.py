@@ -995,80 +995,31 @@ if choice == "🏠 股票详情中心":
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
 
-    # ── 通过 query_params 同步选中股票 ──
-    if all_stocks:
-        if 'stock' in st.query_params and st.query_params['stock'] in all_stocks:
-            selected_stock = st.query_params['stock']
-        else:
-            selected_stock = all_stocks[0]
-    else:
-        selected_stock = None
-
     # ── 顶部标题 ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定股票选择器：通过 components.html iframe 创建独立 HTML select ──
+    # ── 股票选择器（原生 selectbox，可靠响应） ──
     if all_stocks:
-        import json as _json
-        _stocks_json = _json.dumps(all_stocks, ensure_ascii=False)
-        _cur_stock = selected_stock or (all_stocks[0] if all_stocks else "")
-        components.html(f"""<script>
-        (function() {{
-            var doc = window.parent.document;
-            if(doc.getElementById('fixed-stock-picker')) return;
-            var stocks = {_stocks_json};
-            var current = '{_cur_stock}';
-            var wrapper = doc.createElement('div');
-            wrapper.id = 'fixed-stock-picker';
-            var lbl = doc.createElement('label');
-            lbl.innerHTML = '&#128269;';
-            var sel = doc.createElement('select');
-            sel.id = 'fixed-stock-select';
-            for(var i=0;i<stocks.length;i++){{
-                var opt = doc.createElement('option');
-                opt.value = stocks[i];
-                opt.textContent = stocks[i];
-                if(stocks[i] === current) opt.selected = true;
-                sel.appendChild(opt);
-            }}
-            sel.addEventListener('change', function(){{
-                var stock = this.value;
-                var url = new URL(doc.location.href);
-                url.searchParams.set('stock', stock);
-                // 在父页面创建隐藏 link 并点击，避免跨域限制
-                var a = doc.createElement('a');
-                a.href = url.toString();
-                a.style.display = 'none';
-                doc.body.appendChild(a);
-                a.click();
-                doc.body.removeChild(a);
-            }});
-            wrapper.appendChild(lbl);
-            wrapper.appendChild(sel);
-            doc.body.appendChild(wrapper);
-            // 侧边栏展开时自动调整 right 位置
-            function syncRight(){{
-                var sb = doc.querySelector('[data-testid="stSidebar"]');
-                if(sb){{
-                    var w = sb.getBoundingClientRect().width;
-                    wrapper.style.right = (w > 50 ? (w - 280 + 20) : 20) + 'px';
-                }} else {{
-                    wrapper.style.right = '20px';
-                }}
-            }}
-            syncRight();
-            setTimeout(syncRight, 300);
-            setTimeout(syncRight, 800);
-            setTimeout(syncRight, 2000);
-            var mob = new MutationObserver(function(){{ setTimeout(syncRight, 150); }});
-            mob.observe(doc.body, {{childList:true, subtree:true}});
-            setTimeout(function(){{ mob.disconnect(); }}, 30000);
-        }})();
-        </script>""", height=1)
+        # 保持上次选中的股票（跨次重跑不丢失）
+        _prev = st.session_state.get("detail_selected_stock", all_stocks[0])
+        _prev_idx = all_stocks.index(_prev) if _prev in all_stocks else 0
+        selected_stock = st.selectbox(
+            "🔍 选择股票",
+            all_stocks,
+            index=_prev_idx,
+            key="detail_stock_selectbox",
+        )
+        st.session_state["detail_selected_stock"] = selected_stock
+    else:
+        selected_stock = None
 
-    # ── 自动更新全部现价（每次加载页面时执行） ──
-    if _YF_OK and all_stocks:
-        _auto_fetched = fetch_latest_prices(all_stocks)
+    # ── 自动更新全部现价（带缓存，5分钟内不重复拉取） ──
+    _now_ts = datetime.now().timestamp()
+    _last_fetch_ts = st.session_state.get("_prices_fetch_ts", 0)
+    _cache_ttl = 300   # 秒（5分钟）
+    if all_stocks and (_now_ts - _last_fetch_ts > _cache_ttl):
+        with st.spinner("正在获取最新行情…"):
+            _auto_fetched = fetch_latest_prices(all_stocks)
         if _auto_fetched:
             for _name, _price in _auto_fetched.items():
                 _old = c.execute("SELECT current_price, manual_cost FROM prices WHERE code = ?", (_name,)).fetchone()
@@ -1076,6 +1027,7 @@ if choice == "🏠 股票详情中心":
                 c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
                           (_name, _price, _mc))
             conn.commit()
+            st.session_state["_prices_fetch_ts"] = _now_ts  # 更新缓存时间戳
 
     latest_prices_data = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
@@ -1348,6 +1300,10 @@ if choice == "🏠 股票详情中心":
             ).fetchone()
             if sig_row:
                 s_high_pt, s_low_pt, s_up_th, s_down_th, s_h_date, s_l_date = sig_row
+                s_high_pt = s_high_pt or 0.0
+                s_low_pt  = s_low_pt  or 0.0
+                s_up_th   = s_up_th   or 0.0
+                s_down_th = s_down_th or 0.0
                 dr = ((now_p - s_high_pt) / s_high_pt * 100) if s_high_pt > 0 else 0
                 rr = ((now_p - s_low_pt)  / s_low_pt  * 100) if s_low_pt  > 0 else 0
                 if rr >= s_up_th:
@@ -2390,12 +2346,16 @@ elif choice == "🔔 买卖信号":
     if not sig_df.empty:
         html = '<table class="pro-table"><thead><tr><th>代码</th><th>高点</th><th>低点</th><th>距高点</th><th>距低点</th><th>建议操作</th></tr></thead><tbody>'
         for _, r in sig_df.iterrows():
-            np_  = prices_map.get(r['code'], 0.0)
-            dr   = ((np_ - r['high_point']) / r['high_point'] * 100) if r['high_point'] > 0 else 0
-            rr   = ((np_ - r['low_point'])  / r['low_point']  * 100) if r['low_point']  > 0 else 0
-            if rr >= r['up_threshold']:
+            np_      = prices_map.get(r['code']) or 0.0   # current_price 可能 None/NULL
+            _hp      = float(r['high_point'])  if pd.notna(r['high_point'])  else 0.0
+            _lp      = float(r['low_point'])   if pd.notna(r['low_point'])   else 0.0
+            _up_th   = float(r['up_threshold'])   if pd.notna(r['up_threshold'])   else 0.0
+            _down_th = float(r['down_threshold']) if pd.notna(r['down_threshold']) else 0.0
+            dr   = ((np_ - _hp) / _hp * 100) if _hp > 0 else 0
+            rr   = ((np_ - _lp) / _lp * 100) if _lp > 0 else 0
+            if rr >= _up_th:
                 badge = '<span class="badge badge-sell">🟢 建议卖出</span>'
-            elif dr <= -r['down_threshold']:
+            elif dr <= -_down_th:
                 badge = '<span class="badge badge-buy">🔴 建议买入</span>'
             else:
                 badge = '<span class="badge badge-hold">⚖️ 观望</span>'
