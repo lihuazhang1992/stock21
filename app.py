@@ -2419,13 +2419,11 @@ elif choice == "📜 历史明细":
                 elif not q_code:
                     st.error("❌ 请选择股票名称")
                 else:
-                    conn2 = sqlite3.connect(str(DB_FILE))
-                    conn2.execute(
+                    conn.execute(
                         "INSERT INTO trades (date, code, action, price, quantity, note) VALUES (?,?,?,?,?,?)",
                         (q_date.strftime('%Y-%m-%d'), q_code, q_act, q_price, int(q_qty), q_note.strip() or None)
                     )
-                    conn2.commit()
-                    conn2.close()
+                    conn.commit()
                     threading.Thread(target=sync_db_to_github, daemon=True).start()
                     st.success(f"✅ 已录入：{q_code} {q_act} {q_price:.3f} × {int(q_qty)}")
                     st.rerun()
@@ -2445,13 +2443,26 @@ elif choice == "📜 历史明细":
         total_buy_amt  = (df_full[df_full['action']=='买入']['price'] * df_full[df_full['action']=='买入']['quantity']).sum()
         total_sell_amt = (df_full[df_full['action']=='卖出']['price'] * df_full[df_full['action']=='卖出']['quantity']).sum()
 
-        sm1, sm2, sm3, sm4, sm5, sm6 = st.columns(6)
-        sm1.metric("📋 总记录数", total_count)
-        sm2.metric("📈 涉及股票", stock_count)
-        sm3.metric("🔴 买入笔数", buy_count)
-        sm4.metric("🟢 卖出笔数", sell_count)
-        sm5.metric("💸 累计买入额", f"{total_buy_amt:,.0f}")
-        sm6.metric("💰 累计卖出额", f"{total_sell_amt:,.0f}")
+        _summary_items = [
+            ("📋", "总记录数",   str(total_count),              "var(--text-primary)"),
+            ("📈", "涉及股票",   str(stock_count),              "var(--text-primary)"),
+            ("🔴", "买入笔数",   str(buy_count),                "var(--accent-red, #f43f5e)"),
+            ("🟢", "卖出笔数",   str(sell_count),               "var(--accent-green, #10b981)"),
+            ("💸", "累计买入额", f"{total_buy_amt:,.0f}",       "var(--accent-red, #f43f5e)"),
+            ("💰", "累计卖出额", f"{total_sell_amt:,.0f}",      "var(--accent-green, #10b981)"),
+        ]
+        _cols = st.columns(6)
+        for _col, (_icon, _label, _val, _color) in zip(_cols, _summary_items):
+            _col.markdown(
+                f"""<div style="background:var(--bg-elevated,#1e2533);border:1px solid var(--border,#2d3748);
+                border-radius:10px;padding:10px 8px;text-align:center;min-width:0">
+                  <div style="font-size:0.72em;color:var(--text-muted,#94a3b8);white-space:nowrap;
+                  overflow:hidden;text-overflow:ellipsis">{_icon} {_label}</div>
+                  <div style="font-size:1.05em;font-weight:700;color:{_color};
+                  word-break:break-all;line-height:1.3;margin-top:4px">{_val}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
 
         st.divider()
 
