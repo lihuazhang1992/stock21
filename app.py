@@ -867,25 +867,23 @@ if choice == "🏠 股票详情中心":
     # ── 顶部标题（选择器已通过 fixed HTML 实现） ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定在右上角的股票选择器（JS动态创建到父文档，不遮挡侧边栏） ──
+    # ── 固定在右上角的股票选择器（components.html 注入JS到父文档） ──
     if all_stocks:
         current = selected_stock or ""
-        _opts_js = "\\n".join(f'  o.appendChild(new Option("{s}","{s}"));' for s in all_stocks)
-        _opts_js += f'\\n  o.value = "{current}";'
-        st.html(f"""<script>
+        _opts_js = "\n".join(f'  o.appendChild(new Option("{s}","{s}"));' for s in all_stocks)
+        _opts_js += f'\n  o.value = "{current}";'
+        components.html(f"""<script>
         (function(){{
             var doc = window.parent.document;
-            // 如果已存在就先删除（防止重复）
             var old = doc.getElementById('__fsb_wrap');
             if(old) old.remove();
 
-            // 创建浮动容器
             var wrap = doc.createElement('div');
             wrap.id = '__fsb_wrap';
             wrap.style.cssText = 'position:fixed;top:10px;right:16px;z-index:99999;display:flex;align-items:center;gap:8px;background:rgba(10,14,26,0.92);backdrop-filter:blur(16px);border:1px solid rgba(99,179,237,0.25);border-radius:10px;padding:6px 14px 6px 10px;font-family:Inter,PingFang SC,Microsoft YaHei,system-ui,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,0.35);transition:right 0.3s ease;';
 
             var lbl = doc.createElement('span');
-            lbl.textContent = '\\ud83d\\udd0d';
+            lbl.textContent = '\u{1F50D}';
             lbl.style.cssText = 'font-size:0.78em;color:#4b5e78;font-weight:600;white-space:nowrap;';
             wrap.appendChild(lbl);
 
@@ -898,17 +896,14 @@ if choice == "🏠 股票详情中心":
 
             doc.body.appendChild(wrap);
 
-            // 填充选项
             {_opts_js}
 
-            // 选择器变化 → 更新 URL → 触发 Streamlit rerun
             o.addEventListener('change', function(){{
                 var url = new URL(doc.location.href);
                 url.searchParams.set('stock', this.value);
                 doc.location.href = url.toString();
             }});
 
-            // 监听侧边栏展开/收起 → 调整 right 位置
             function syncSidebar(){{
                 var sb = doc.querySelector('[data-testid="stSidebar"]');
                 if(sb){{
@@ -922,7 +917,7 @@ if choice == "🏠 股票详情中心":
             var sbObs = new MutationObserver(function(){{ setTimeout(syncSidebar, 100); }});
             sbObs.observe(doc.body, {{childList:true, subtree:true, attributes:true}});
         }})();
-        </script>""")
+        </script>""", height=0)
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
@@ -1263,7 +1258,7 @@ if choice == "🏠 股票详情中心":
                 st.rerun()
 
         # ── text_area 自动增高脚本 ──
-        st.html("""<script>
+        components.html("""<script>
         (function(){
             var doc = window.parent.document;
             var _done = new WeakSet();
@@ -1272,15 +1267,14 @@ if choice == "🏠 股票详情中心":
                 _done.add(ta);
                 function doGrow(){
                     ta.style.height = '0px';
-                    ta.style.height = Math.max(68, ta.scrollHeight + 4) + 'px';
+                    var h = Math.max(68, ta.scrollHeight + 4);
+                    ta.style.height = h + 'px';
                 }
                 ta.style.minHeight = '68px';
-                // 延迟首次 grow，等 Streamlit 完成渲染
-                setTimeout(doGrow, 200);
+                setTimeout(doGrow, 300);
                 ta.addEventListener('input', doGrow);
             }
             function autoGrow(){
-                // 找决策历史 form 中的所有 textarea
                 var forms = doc.querySelectorAll('[data-testid="stForm"]');
                 for(var fi = 0; fi < forms.length; fi++){
                     var tas = forms[fi].querySelectorAll('textarea');
@@ -1289,22 +1283,15 @@ if choice == "🏠 股票详情中心":
                     }
                 }
             }
-            // 多次延迟确保 Streamlit iframe/组件渲染完毕
             var delays = [500, 1000, 2000, 4000];
             for(var d = 0; d < delays.length; d++){
-                (function(delay){
-                    setTimeout(autoGrow, delay);
-                })(delays[d]);
+                (function(delay){ setTimeout(autoGrow, delay); })(delays[d]);
             }
-            // MutationObserver 监听后续 DOM 变化
-            var obs = new MutationObserver(function(){
-                setTimeout(autoGrow, 200);
-            });
+            var obs = new MutationObserver(function(){ setTimeout(autoGrow, 200); });
             obs.observe(doc.body, {childList:true, subtree:true});
-            // 10秒后停止观察避免性能问题
-            setTimeout(function(){ obs.disconnect(); }, 10000);
+            setTimeout(function(){ obs.disconnect(); }, 15000);
         })();
-        </script>""")
+        </script>""", height=0)
 
         decisions = pd.read_sql(
             "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 15",
