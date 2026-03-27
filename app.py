@@ -975,11 +975,10 @@ if choice == "🏠 股票详情中心":
 
         # ═══════════════════════════════════════════════
         # 第二行：3列横向并排（同屏显示，无需切换）
-        #   左(3)：🧠 交易逻辑 & 参数设置
-        #   中(3)：🎯 价格目标监控
-        #   右(3)：🔔 买卖信号 & 决策历史
+        #   左(1)：🧠 交易逻辑 & 参数设置
+        #   右(1)：🎯 价格目标监控
         # ═══════════════════════════════════════════════
-        col_strat, col_target, col_signal = st.columns([3, 3, 3], gap="medium")
+        col_strat, col_target = st.columns([1, 1], gap="medium")
 
         # ──────────────────────────────────────────────
         # 左列：交易逻辑 & 参数设置
@@ -1119,11 +1118,17 @@ if choice == "🏠 股票详情中心":
                         st.success("✅ 已保存")
                         st.rerun()
 
+        # ═══════════════════════════════════════════════
+        # 第3行：买卖信号 + 决策历史（全宽并排）
+        # ═══════════════════════════════════════════════
+        st.divider()
+        col_signal, col_decision = st.columns([1, 1], gap="medium")
+
         # ──────────────────────────────────────────────
-        # 右列：买卖信号 & 决策历史
+        # 左列：买卖信号
         # ──────────────────────────────────────────────
         with col_signal:
-            st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-amber);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-amber)">🔔 买卖信号 & 决策历史</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-amber);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-amber)">🔔 买卖信号</div>', unsafe_allow_html=True)
 
             # ── 买卖信号 ──
             sig_row = c.execute(
@@ -1173,8 +1178,11 @@ if choice == "🏠 股票详情中心":
             else:
                 st.markdown('<div style="color:var(--text-muted);font-size:0.82em;padding:10px;background:var(--bg-elevated);border-radius:8px;text-align:center;margin-bottom:8px">暂无信号配置</div>', unsafe_allow_html=True)
 
-            # ── 决策历史 ──
-            st.markdown('<div style="font-size:0.80em;font-weight:600;color:var(--accent-purple);margin-bottom:6px">📜 决策历史</div>', unsafe_allow_html=True)
+        # ──────────────────────────────────────────────
+        # 右列：决策历史
+        # ──────────────────────────────────────────────
+        with col_decision:
+            st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-purple);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-purple)">📜 决策历史</div>', unsafe_allow_html=True)
             with st.form("new_decision", clear_on_submit=True):
                 dc1, dc2 = st.columns([1, 2])
                 d_date    = dc1.date_input("日期", datetime.now())
@@ -1187,7 +1195,7 @@ if choice == "🏠 股票详情中心":
                     st.rerun()
 
             decisions = pd.read_sql(
-                "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 6",
+                "SELECT id, date, decision, reason FROM decision_history WHERE code = ? ORDER BY date DESC LIMIT 10",
                 conn, params=(selected_stock,)
             )
             if decisions.empty:
@@ -1211,7 +1219,7 @@ if choice == "🏠 股票详情中心":
         st.divider()
 
         # ═══════════════════════════════════════════════
-        # 第三行：交易配对与未平仓单 + 历史交易明细（并排）
+        # 第4行：交易配对与未平仓单 + 历史交易明细（并排）
         # ═══════════════════════════════════════════════
         col_trade_pair, col_trade_hist = st.columns([5, 4], gap="medium")
 
