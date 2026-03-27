@@ -158,6 +158,12 @@ def sync_db_to_github():
         repo_dir = base_dir / ".git_repo"
         db_name = DB_FILE.name
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
+        # WAL 模式下先 checkpoint，确保所有数据写入主库文件再复制
+        try:
+            _c = get_connection()
+            _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass
         if repo_dir.exists():
             shutil.rmtree(repo_dir)
         repo = Repo.clone_from(auth_url, repo_dir, depth=1)
@@ -182,8 +188,12 @@ def sync_db_to_github():
 
 st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon="📈")
 
+@st.cache_resource
 def get_connection():
-    return sqlite3.connect(pathlib.Path(__file__).with_name("stock_data_v12.db"), check_same_thread=False)
+    db_path = str(pathlib.Path(__file__).with_name("stock_data_v12.db"))
+    _conn = sqlite3.connect(db_path, check_same_thread=False)
+    _conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，避免锁冲突
+    return _conn
 
 if not DB_FILE.exists():
     try:
@@ -2271,12 +2281,31 @@ elif choice == "📝 交易录入":
 
     # 添加新股票时额外要求填写 ticker 代码
     if t_code == "【添加新股票】":
-        _nc1, _nc2 = st.columns(2)
-        final_code     = _nc1.text_input("新股票名称（必填）", placeholder="例如：腾讯控股")
-        new_ticker_inp = _nc2.text_input(
-            "股票代码（必填，用于自动获取价格）",
-            placeholder="沪市: 1.600900  深市: 0.002594  港股: 116.00981  美股: 105.AAPL",
+        _nc1, _nc2, _nc3 = st.columns([2, 1.2, 1.8])
+        final_code  = _nc1.text_input("新股票名称（必填）", placeholder="例如：腾讯控股")
+        _market     = _nc2.selectbox(
+            "所属市场",
+            options=["A股·沪市", "A股·深市", "港股", "美股"],
+            index=0,
         )
+        _market_prefix = {
+            "A股·沪市": "1.",
+            "A股·深市": "0.",
+            "港股":     "116.",
+            "美股":     "105.",
+        }[_market]
+        _market_hint = {
+            "A股·沪市": "600900",
+            "A股·深市": "002594",
+            "港股":     "00981",
+            "美股":     "TSLA",
+        }[_market]
+        _raw_code   = _nc3.text_input(
+            "股票代码（纯代码，系统自动加前缀）",
+            placeholder=f"例如：{_market_hint}",
+        )
+        # 自动拼接 secid 前缀
+        new_ticker_inp = (_market_prefix + _raw_code.strip()) if _raw_code.strip() else ""
     else:
         final_code     = t_code
         new_ticker_inp = None
@@ -2294,7 +2323,7 @@ elif choice == "📝 交易录入":
             if not final_code:
                 st.error("❌ 请填写或选择股票")
             elif t_code == "【添加新股票】" and not new_ticker_inp:
-                st.error("❌ 添加新股票时请填写股票代码（用于自动获取价格）")
+                st.error("❌ 添加新股票时请填写股票代码")
             elif p is None or q is None:
                 st.error("❌ 请填写单价和数量")
             else:
@@ -2628,8 +2657,28 @@ elif choice == "📝 交易录入":
 
     # 添加新股票
     with st.form("add_stock_form", clear_on_submit=True):
-        new_stock_name = st.text_input("股票名称", placeholder="例如：中芯国际")
-        new_stock_code = st.text_input("股票代码（secid格式）", placeholder="沪市: 1.600900  深市: 0.002594  港股: 116.00981  美股: 105.AAPL")
+        _sm1, _sm2, _sm3 = st.columns([2, 1.2, 1.8])
+        new_stock_name  = _sm1.text_input("股票名称", placeholder="例如：腾讯控股")
+        _sm_market      = _sm2.selectbox(
+            "所属市场",
+            options=["A股·沪市", "A股·深市", "港股", "美股"],
+            index=0,
+        )
+        _sm_prefix = {
+            "A股·沪市": "1.",
+            "A股·深市": "0.",
+            "港股":     "116.",
+            "美股":     "105.",
+        }[_sm_market]
+        _sm_hint = {
+            "A股·沪市": "600900",
+            "A股·深市": "002594",
+            "港股":     "00981",
+            "美股":     "TSLA",
+        }[_sm_market]
+        _sm_raw         = _sm3.text_input("股票代码（纯代码）", placeholder=f"例如：{_sm_hint}")
+        new_stock_code  = (_sm_prefix + _sm_raw.strip()) if _sm_raw.strip() else ""
+
         submitted = st.form_submit_button("➕ 添加股票", type="primary", use_container_width=True)
 
         if submitted and new_stock_name and new_stock_code:
@@ -2644,6 +2693,8 @@ elif choice == "📝 交易录入":
                 st.error("❌ 该股票名称已存在，请使用其他名称或删除后重新添加")
             except Exception as e:
                 st.error(f"❌ 添加失败：{e}")
+        elif submitted and new_stock_name and not _sm_raw.strip():
+            st.error("❌ 请填写股票代码")
 
     # 显示股票列表
     st.markdown("---")
