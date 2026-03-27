@@ -883,7 +883,7 @@ if choice == "🏠 股票详情中心":
             wrap.style.cssText = 'position:fixed;top:10px;right:16px;z-index:99999;display:flex;align-items:center;gap:8px;background:rgba(10,14,26,0.92);backdrop-filter:blur(16px);border:1px solid rgba(99,179,237,0.25);border-radius:10px;padding:6px 14px 6px 10px;font-family:Inter,PingFang SC,Microsoft YaHei,system-ui,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,0.35);transition:right 0.3s ease;';
 
             var lbl = doc.createElement('span');
-            lbl.textContent = '\u{1F50D}';
+            lbl.textContent = "\U0001f50d";
             lbl.style.cssText = 'font-size:0.78em;color:#4b5e78;font-weight:600;white-space:nowrap;';
             wrap.appendChild(lbl);
 
