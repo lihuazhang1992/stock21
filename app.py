@@ -931,9 +931,16 @@ if choice == "🏠 股票详情中心":
                 sel.appendChild(opt);
             }}
             sel.addEventListener('change', function(){{
-                var params = new URLSearchParams(window.parent.location.search);
-                params.set('stock', this.value);
-                window.parent.location.search = params.toString();
+                var stock = this.value;
+                var url = new URL(doc.location.href);
+                url.searchParams.set('stock', stock);
+                // 在父页面创建隐藏 link 并点击，避免跨域限制
+                var a = doc.createElement('a');
+                a.href = url.toString();
+                a.style.display = 'none';
+                doc.body.appendChild(a);
+                a.click();
+                doc.body.removeChild(a);
             }});
             wrapper.appendChild(lbl);
             wrapper.appendChild(sel);
