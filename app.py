@@ -270,6 +270,17 @@ h1, h2, h3, h4 {
     color: var(--text-primary) !important;
     letter-spacing: -0.02em !important;
 }
+
+/* ─── 股票选择器 sticky 固定条 ─── */
+.sticky-stock-bar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-base);
+    padding: 12px 0 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
 /* ─── 隐藏顶部 Header 工具栏（保留侧边栏收起/展开按钮）─── */
 [data-testid="stHeader"] {
     background: transparent !important;
@@ -850,12 +861,14 @@ if choice == "🏠 股票详情中心":
     all_stocks = get_dynamic_stock_list()
     df_trades = pd.read_sql("SELECT * FROM trades ORDER BY date ASC, id ASC", conn)
 
-    # ── 顶部标题 + 股票选择器（同行，下拉不遮挡数据） ──
+    # ── 顶部标题 + sticky 股票选择器 ──
+    st.markdown('<div class="sticky-stock-bar">', unsafe_allow_html=True)
     _title_col, _select_col = st.columns([3, 2])
     with _title_col:
         _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
     with _select_col:
         selected_stock = st.selectbox("🔍 选择分析股票", all_stocks, index=0 if all_stocks else None, label_visibility="collapsed")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
