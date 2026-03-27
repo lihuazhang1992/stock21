@@ -692,16 +692,6 @@ div[data-testid="stCustomComponentV1"] {
     field-sizing: content !important;
     min-height: 68px !important;
 }
-/* ─── 股票选择器 sticky ─── */
-.sticky-stock-sel [data-testid="stVerticalBlock"] {
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 1000 !important;
-    background: var(--bg-base) !important;
-    padding-top: 8px !important;
-    padding-bottom: 8px !important;
-    margin-bottom: 0 !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -883,13 +873,12 @@ if choice == "🏠 股票详情中心":
     # ── 顶部标题 ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定的股票选择器（st.selectbox + CSS sticky） ──
+    # ── 固定的股票选择器（st.selectbox，JS 移到 fixed 容器） ──
     if all_stocks:
         def _on_stock_change():
             st.query_params['stock'] = st.session_state['_stock_sel']
             st.rerun()
 
-        st.markdown('<div class="sticky-stock-sel">', unsafe_allow_html=True)
         _sel_col1, _sel_col2 = st.columns([1, 3])
         with _sel_col1:
             st.selectbox(
@@ -899,9 +888,55 @@ if choice == "🏠 股票详情中心":
                 on_change=_on_stock_change,
                 label_visibility="visible"
             )
-        st.markdown('</div>', unsafe_allow_html=True)
     else:
         selected_stock = None
+
+    # JS: 将 selectbox 容器设为 fixed，滚动时不消失
+    st.markdown("""<script>
+    (function(){
+        function fixSelect(){
+            var targets = document.querySelectorAll('[data-testid="stSelectbox"]');
+            targets.forEach(function(el){
+                if(el.dataset._fixed) return;
+                var label = el.querySelector('label');
+                if(label && label.textContent.indexOf('切换股票') !== -1){
+                    el.dataset._fixed = '1';
+                    el.style.position = 'fixed';
+                    el.style.top = '10px';
+                    el.style.right = '16px';
+                    el.style.zIndex = '99999';
+                    el.style.background = 'rgba(10,14,26,0.92)';
+                    el.style.backdropFilter = 'blur(16px)';
+                    el.style.border = '1px solid rgba(99,179,237,0.25)';
+                    el.style.borderRadius = '10px';
+                    el.style.padding = '6px 14px';
+                    el.style.boxShadow = '0 4px 24px rgba(0,0,0,0.35)';
+                    // 侧边栏展开时调整 right
+                    function syncPos(){
+                        var sb = document.querySelector('[data-testid="stSidebar"]');
+                        if(sb){
+                            var w = sb.getBoundingClientRect().width;
+                            el.style.right = (w > 50 ? (w - 280 + 16) : 16) + 'px';
+                        }
+                    }
+                    syncPos();
+                    setTimeout(syncPos, 500);
+                    setTimeout(syncPos, 1500);
+                    var mob = new MutationObserver(function(){ setTimeout(syncPos, 200); });
+                    mob.observe(document.body, {childList:true, subtree:true});
+                    setTimeout(function(){ mob.disconnect(); }, 20000);
+                }
+            });
+        }
+        setTimeout(fixSelect, 500);
+        setTimeout(fixSelect, 1500);
+        setTimeout(fixSelect, 3000);
+        setTimeout(fixSelect, 5000);
+        var ob = new MutationObserver(function(){ setTimeout(fixSelect, 200); });
+        ob.observe(document.body, {childList:true, subtree:true});
+        setTimeout(function(){ ob.disconnect(); }, 15000);
+    })();
+    </script>""", unsafe_allow_html=True)
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
