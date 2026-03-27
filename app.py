@@ -73,14 +73,15 @@ def _build_ticker_map() -> dict:
 
 def _fetch_eastmoney(secids: list) -> dict:
     """
-    东方财富批量行情接口，延迟约 3~10 秒。
+    东方财富批量行情接口。
     secids: ['1.600900', '0.002594', '116.00981', '105.TSLA', ...]
-    返回 {secid: 最新价(float)}
+    返回 {股票纯代码: 最新价(float)}
+    f2=现价（交易时段）, f18=昨收（非交易时段兜底）, f12=代码
     """
     import urllib.request, json
     if not secids:
         return {}
-    fields = "f2,f12"   # f2=最新价(×100需除以100), f12=代码
+    fields = "f2,f18,f12"   # f2=现价, f18=昨收（非交易时段兜底）, f12=代码
     url = (
         "https://push2.eastmoney.com/api/qt/ulist.np/get"
         f"?fltt=2&invt=2&fields={fields}&secids={','.join(secids)}"
@@ -94,8 +95,14 @@ def _fetch_eastmoney(secids: list) -> dict:
         for item in items:
             price = item.get("f2")
             code  = str(item.get("f12", ""))
-            if price and price != "-" and code:
-                result[code] = round(float(price), 4)
+            if not code:
+                continue
+            # f2 为 "-"、None 或 0 时，用昨收 f18 兜底
+            if price is None or price == "-" or price == 0:
+                price = item.get("f18")
+            if price is None or price == "-" or price == 0:
+                continue
+            result[code] = round(float(price), 4)
         return result
     except Exception:
         return {}
@@ -1020,14 +1027,16 @@ if choice == "🏠 股票详情中心":
     if all_stocks and (_now_ts - _last_fetch_ts > _cache_ttl):
         with st.spinner("正在获取最新行情…"):
             _auto_fetched = fetch_latest_prices(all_stocks)
+        # 无论接口是否返回数据，都更新时间戳，避免每次刷新都重试
+        st.session_state["_prices_fetch_ts"] = _now_ts
         if _auto_fetched:
             for _name, _price in _auto_fetched.items():
-                _old = c.execute("SELECT current_price, manual_cost FROM prices WHERE code = ?", (_name,)).fetchone()
-                _mc  = float(_old[1]) if _old and _old[1] is not None else 0.0
-                c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
-                          (_name, _price, _mc))
+                if _price and _price > 0:   # 只写入有效价格，绝不用0覆盖历史价格
+                    _old = c.execute("SELECT current_price, manual_cost FROM prices WHERE code = ?", (_name,)).fetchone()
+                    _mc  = float(_old[1]) if _old and _old[1] is not None else 0.0
+                    c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
+                              (_name, _price, _mc))
             conn.commit()
-            st.session_state["_prices_fetch_ts"] = _now_ts  # 更新缓存时间戳
 
     latest_prices_data = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
