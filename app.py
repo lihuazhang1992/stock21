@@ -457,14 +457,10 @@ input:focus, textarea:focus {
     font-weight: 500 !important;
 }
 /* ─── textarea 自动增高支持 ─── */
-.stTextArea > div > div > div {
-    overflow: visible !important;
-    resize: vertical !important;
-}
-.stTextArea textarea {
-    overflow: hidden !important;
-    resize: none !important;
-}
+.stTextArea [data-baseweb="textarea"] { height: auto !important; }
+.stTextArea textarea { overflow: hidden !important; resize: none !important; height: auto !important; }
+.stTextArea [class*="stTextArea"] > div > div { height: auto !important; }
+.stTextArea div[data-testid="stGrowingTextarea"] { height: auto !important; }
 
 /* ─── 按钮 ─── */
 .stButton > button {
@@ -871,65 +867,62 @@ if choice == "🏠 股票详情中心":
     # ── 顶部标题（选择器已通过 fixed HTML 实现） ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定在右上角的股票选择器（不遮挡侧边栏，不遮挡内容） ──
+    # ── 固定在右上角的股票选择器（JS动态创建到父文档，不遮挡侧边栏） ──
     if all_stocks:
         current = selected_stock or ""
-        st.html(f"""
-        <div id="__fixed_stock_bar" style="
-            position:fixed; top:10px; right:16px; z-index:99999;
-            display:flex; align-items:center; gap:8px;
-            background:rgba(10,14,26,0.92);
-            backdrop-filter:blur(16px);
-            border:1px solid rgba(99,179,237,0.25);
-            border-radius:10px; padding:6px 14px 6px 10px;
-            font-family:'Inter','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
-            box-shadow:0 4px 24px rgba(0,0,0,0.35);
-            transition:right 0.3s ease;
-        ">
-            <span style="font-size:0.78em;color:#4b5e78;font-weight:600;white-space:nowrap">🔍</span>
-            <select id="__fixed_stock_select" style="
-                background:#1e2d40; color:#f0f6ff;
-                border:1px solid rgba(99,179,237,0.25);
-                border-radius:6px; padding:5px 10px;
-                font-size:0.85em; cursor:pointer;
-                outline:none; transition:border 0.18s;
-                font-family:inherit; min-width:100px;
-            " onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='rgba(99,179,237,0.25)'">
-                {"".join(f'<option value="{s}"{" selected" if s==current else ""}>{s}</option>' for s in all_stocks)}
-            </select>
-        </div>
-        <script>
+        _opts_js = "\\n".join(f'  o.appendChild(new Option("{s}","{s}"));' for s in all_stocks)
+        _opts_js += f'\\n  o.value = "{current}";'
+        st.html(f"""<script>
         (function(){{
             var doc = window.parent.document;
-            var bar = doc.getElementById('__fixed_stock_bar');
-            var sel = doc.getElementById('__fixed_stock_select');
+            // 如果已存在就先删除（防止重复）
+            var old = doc.getElementById('__fsb_wrap');
+            if(old) old.remove();
+
+            // 创建浮动容器
+            var wrap = doc.createElement('div');
+            wrap.id = '__fsb_wrap';
+            wrap.style.cssText = 'position:fixed;top:10px;right:16px;z-index:99999;display:flex;align-items:center;gap:8px;background:rgba(10,14,26,0.92);backdrop-filter:blur(16px);border:1px solid rgba(99,179,237,0.25);border-radius:10px;padding:6px 14px 6px 10px;font-family:Inter,PingFang SC,Microsoft YaHei,system-ui,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,0.35);transition:right 0.3s ease;';
+
+            var lbl = doc.createElement('span');
+            lbl.textContent = '\\ud83d\\udd0d';
+            lbl.style.cssText = 'font-size:0.78em;color:#4b5e78;font-weight:600;white-space:nowrap;';
+            wrap.appendChild(lbl);
+
+            var o = doc.createElement('select');
+            o.id = '__fsb_sel';
+            o.style.cssText = 'background:#1e2d40;color:#f0f6ff;border:1px solid rgba(99,179,237,0.25);border-radius:6px;padding:5px 10px;font-size:0.85em;cursor:pointer;outline:none;transition:border 0.18s;font-family:inherit;min-width:100px;';
+            o.onfocus = function(){{ this.style.borderColor='#3b82f6'; }};
+            o.onblur  = function(){{ this.style.borderColor='rgba(99,179,237,0.25)'; }};
+            wrap.appendChild(o);
+
+            doc.body.appendChild(wrap);
+
+            // 填充选项
+            {_opts_js}
+
+            // 选择器变化 → 更新 URL → 触发 Streamlit rerun
+            o.addEventListener('change', function(){{
+                var url = new URL(doc.location.href);
+                url.searchParams.set('stock', this.value);
+                doc.location.href = url.toString();
+            }});
+
             // 监听侧边栏展开/收起 → 调整 right 位置
             function syncSidebar(){{
                 var sb = doc.querySelector('[data-testid="stSidebar"]');
-                if(sb && bar){{
+                if(sb){{
                     var w = sb.getBoundingClientRect().width;
-                    // 侧边栏展开时(>300px)，bar需要额外右移
-                    bar.style.right = (w > 50 ? (w - 280 + 16) : 16) + 'px';
+                    wrap.style.right = (w > 50 ? (w - 280 + 16) : 16) + 'px';
                 }}
             }}
             syncSidebar();
             setTimeout(syncSidebar, 500);
             setTimeout(syncSidebar, 1500);
-            var sbObs = new MutationObserver(function(){{
-                setTimeout(syncSidebar, 100);
-            }});
+            var sbObs = new MutationObserver(function(){{ setTimeout(syncSidebar, 100); }});
             sbObs.observe(doc.body, {{childList:true, subtree:true, attributes:true}});
-            // 选择器变化 → 更新 URL → 触发 Streamlit rerun
-            if(sel){{
-                sel.addEventListener('change', function(){{
-                    var url = new URL(doc.location.href);
-                    url.searchParams.set('stock', this.value);
-                    doc.location.href = url.toString();
-                }});
-            }}
         }})();
-        </script>
-        """)
+        </script>""")
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
@@ -1273,36 +1266,43 @@ if choice == "🏠 股票详情中心":
         st.html("""<script>
         (function(){
             var doc = window.parent.document;
-            var _done = new WeakSet();  // 防止重复绑定
+            var _done = new WeakSet();
             function growOne(ta){
                 if(_done.has(ta)) return;
                 _done.add(ta);
                 function doGrow(){
-                    var h = Math.max(68, ta.scrollHeight);
-                    ta.style.height = h + 'px';
-                    ta.style.overflow = 'hidden';
-                    // Streamlit 外层 wrapper: [data-testid="stTextArea"] > div
-                    var wrapper = ta.closest('[data-testid="stTextArea"]');
-                    if(wrapper){
-                        var inner = wrapper.querySelector(':scope > div');
-                        if(inner) inner.style.height = h + 'px';
-                    }
+                    ta.style.height = '0px';
+                    ta.style.height = Math.max(68, ta.scrollHeight + 4) + 'px';
                 }
                 ta.style.minHeight = '68px';
-                doGrow();
+                // 延迟首次 grow，等 Streamlit 完成渲染
+                setTimeout(doGrow, 200);
                 ta.addEventListener('input', doGrow);
             }
             function autoGrow(){
+                // 找决策历史 form 中的所有 textarea
                 var forms = doc.querySelectorAll('[data-testid="stForm"]');
-                forms.forEach(function(form){
-                    var areas = form.querySelectorAll('textarea');
-                    areas.forEach(growOne);
-                });
+                for(var fi = 0; fi < forms.length; fi++){
+                    var tas = forms[fi].querySelectorAll('textarea');
+                    for(var ti = 0; ti < tas.length; ti++){
+                        growOne(tas[ti]);
+                    }
+                }
             }
-            // 延迟执行确保 Streamlit 渲染完毕
-            setTimeout(autoGrow, 600);
-            setTimeout(autoGrow, 1500);
-            setTimeout(autoGrow, 3000);
+            // 多次延迟确保 Streamlit iframe/组件渲染完毕
+            var delays = [500, 1000, 2000, 4000];
+            for(var d = 0; d < delays.length; d++){
+                (function(delay){
+                    setTimeout(autoGrow, delay);
+                })(delays[d]);
+            }
+            // MutationObserver 监听后续 DOM 变化
+            var obs = new MutationObserver(function(){
+                setTimeout(autoGrow, 200);
+            });
+            obs.observe(doc.body, {childList:true, subtree:true});
+            // 10秒后停止观察避免性能问题
+            setTimeout(function(){ obs.disconnect(); }, 10000);
         })();
         </script>""")
 
