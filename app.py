@@ -1128,79 +1128,64 @@ if choice == "🏠 股票详情中心":
                         st.success("✅ 已保存")
                         st.rerun()
 
+            # ── 买卖信号（紧跟价格目标下方） ──
+            st.markdown('<div style="font-size:0.83em;font-weight:700;color:var(--accent-amber);margin:12px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--accent-amber)">🔔 买卖信号</div>', unsafe_allow_html=True)
+            sig_row = c.execute(
+                "SELECT high_point, low_point, up_threshold, down_threshold, high_date, low_date FROM signals WHERE code = ?",
+                (selected_stock,)
+            ).fetchone()
+            if sig_row:
+                s_high_pt, s_low_pt, s_up_th, s_down_th, s_h_date, s_l_date = sig_row
+                dr = ((now_p - s_high_pt) / s_high_pt * 100) if s_high_pt > 0 else 0
+                rr = ((now_p - s_low_pt)  / s_low_pt  * 100) if s_low_pt  > 0 else 0
+                if rr >= s_up_th:
+                    sig_badge = f'<span class="badge badge-sell">🟢 建议卖出</span>'
+                    sig_bg = "rgba(244,63,94,0.08)"
+                elif dr <= -s_down_th:
+                    sig_badge = f'<span class="badge badge-buy">🔴 建议买入</span>'
+                    sig_bg = "rgba(16,185,129,0.08)"
+                else:
+                    sig_badge = f'<span class="badge badge-hold">⚖️ 观望</span>'
+                    sig_bg = "rgba(245,158,11,0.08)"
+                dr_cls = "profit-red" if dr >= 0 else "loss-green"
+                rr_cls = "profit-red" if rr >= 0 else "loss-green"
+                st.markdown(f'''
+                <div style="background:{sig_bg};border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                        <span style="font-size:0.80em;color:var(--text-secondary)">信号状态</span>
+                        {sig_badge}
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.80em">
+                        <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
+                            <div style="color:var(--text-muted);font-size:0.78em">高点 {s_h_date}</div>
+                            <div style="font-weight:600">{s_high_pt}</div>
+                            <div class="{dr_cls}" style="font-size:0.83em">距高点 {dr:.2f}%</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
+                            <div style="color:var(--text-muted);font-size:0.78em">低点 {s_l_date}</div>
+                            <div style="font-weight:600">{s_low_pt}</div>
+                            <div class="{rr_cls}" style="font-size:0.83em">距低点 {rr:.2f}%</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:4px;display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.78em">
+                        <div style="color:var(--text-muted)">卖出触发: <span style="color:var(--text-primary);font-weight:600">+{s_up_th}%</span></div>
+                        <div style="color:var(--text-muted)">买入触发: <span style="color:var(--text-primary);font-weight:600">-{s_down_th}%</span></div>
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:var(--text-muted);font-size:0.82em;padding:10px;background:var(--bg-elevated);border-radius:8px;text-align:center">暂无信号配置</div>', unsafe_allow_html=True)
+
         # ═══════════════════════════════════════════════
-        # 第3行：买卖信号（接右列下方） + 决策历史（全宽）
+        # 第3行：决策历史（全宽）
         # ═══════════════════════════════════════════════
         st.divider()
-
-        # ──────────────────────────────────────────────
-        # 买卖信号（在价格目标下方，全宽）
-        # ──────────────────────────────────────────────
-        st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-amber);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-amber)">🔔 买卖信号</div>', unsafe_allow_html=True)
-
-        # ── 买卖信号 ──
-        sig_row = c.execute(
-            "SELECT high_point, low_point, up_threshold, down_threshold, high_date, low_date FROM signals WHERE code = ?",
-            (selected_stock,)
-        ).fetchone()
-
-        if sig_row:
-            s_high_pt, s_low_pt, s_up_th, s_down_th, s_h_date, s_l_date = sig_row
-            dr = ((now_p - s_high_pt) / s_high_pt * 100) if s_high_pt > 0 else 0
-            rr = ((now_p - s_low_pt)  / s_low_pt  * 100) if s_low_pt  > 0 else 0
-            if rr >= s_up_th:
-                sig_badge = f'<span class="badge badge-sell">🟢 建议卖出</span>'
-                sig_bg = "rgba(244,63,94,0.08)"
-            elif dr <= -s_down_th:
-                sig_badge = f'<span class="badge badge-buy">🔴 建议买入</span>'
-                sig_bg = "rgba(16,185,129,0.08)"
-            else:
-                sig_badge = f'<span class="badge badge-hold">⚖️ 观望</span>'
-                sig_bg = "rgba(245,158,11,0.08)"
-            dr_cls = "profit-red" if dr >= 0 else "loss-green"
-            rr_cls = "profit-red" if rr >= 0 else "loss-green"
-            st.markdown(f'''
-            <div style="background:{sig_bg};border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <span style="font-size:0.80em;color:var(--text-secondary)">信号状态</span>
-                    {sig_badge}
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;font-size:0.80em">
-                    <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
-                        <div style="color:var(--text-muted);font-size:0.78em">高点 {s_h_date}</div>
-                        <div style="font-weight:600">{s_high_pt}</div>
-                        <div class="{dr_cls}" style="font-size:0.83em">距高点 {dr:.2f}%</div>
-                    </div>
-                    <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
-                        <div style="color:var(--text-muted);font-size:0.78em">低点 {s_l_date}</div>
-                        <div style="font-weight:600">{s_low_pt}</div>
-                        <div class="{rr_cls}" style="font-size:0.83em">距低点 {rr:.2f}%</div>
-                    </div>
-                    <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
-                        <div style="color:var(--text-muted);font-size:0.78em">卖出触发</div>
-                        <div style="font-weight:600;color:var(--accent-red)">+{s_up_th}%</div>
-                        <div style="font-size:0.78em;color:var(--text-secondary)">距低点涨幅</div>
-                    </div>
-                    <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px">
-                        <div style="color:var(--text-muted);font-size:0.78em">买入触发</div>
-                        <div style="font-weight:600;color:var(--accent-green)">-{s_down_th}%</div>
-                        <div style="font-size:0.78em;color:var(--text-secondary)">距高点跌幅</div>
-                    </div>
-                </div>
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('<div style="color:var(--text-muted);font-size:0.82em;padding:10px;background:var(--bg-elevated);border-radius:8px;text-align:center;margin-bottom:8px">暂无信号配置</div>', unsafe_allow_html=True)
-
-        # ──────────────────────────────────────────────
-        # 决策历史（全宽）
-        # ──────────────────────────────────────────────
         st.markdown('<div style="font-size:0.85em;font-weight:700;color:var(--accent-purple);margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid var(--accent-purple)">📜 决策历史</div>', unsafe_allow_html=True)
         with st.form("new_decision", clear_on_submit=True):
-            dc1, dc2, dc3 = st.columns([1, 3, 1])
+            dc1, dc2 = st.columns(2)
             d_date    = dc1.date_input("日期", datetime.now())
             d_content = dc2.text_input("决策内容", placeholder="例如：减仓30%")
-            d_reason  = dc3.text_area("决策原因（可选）", placeholder="为什么？", height=48, label_visibility="collapsed")
+            d_reason  = st.text_area("决策原因（可选）", placeholder="为什么做这个决策？", height=68, label_visibility="collapsed")
             if st.form_submit_button("➕ 记录决策", use_container_width=True):
                 c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
                           (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
