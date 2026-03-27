@@ -906,40 +906,41 @@ if choice == "🏠 股票详情中心":
     # ── 顶部标题 ──
     _page_title("🏠", "股票详情中心", "单股全景 · 一页尽览")
 
-    # ── 固定股票选择器：独立 HTML select，position fixed 右上角 ──
+    # ── 固定股票选择器：通过 components.html iframe 创建独立 HTML select ──
     if all_stocks:
         import json as _json
         _stocks_json = _json.dumps(all_stocks, ensure_ascii=False)
         _cur_stock = selected_stock or (all_stocks[0] if all_stocks else "")
-        st.markdown(f"""<script>
-        (function(){{
-            if(document.getElementById('fixed-stock-picker')) return;
+        components.html(f"""<script>
+        (function() {{
+            var doc = window.parent.document;
+            if(doc.getElementById('fixed-stock-picker')) return;
             var stocks = {_stocks_json};
             var current = '{_cur_stock}';
-            var wrapper = document.createElement('div');
+            var wrapper = doc.createElement('div');
             wrapper.id = 'fixed-stock-picker';
-            var lbl = document.createElement('label');
-            lbl.innerHTML = '\U0001f50d';
-            var sel = document.createElement('select');
+            var lbl = doc.createElement('label');
+            lbl.innerHTML = '&#128269;';
+            var sel = doc.createElement('select');
             sel.id = 'fixed-stock-select';
             for(var i=0;i<stocks.length;i++){{
-                var opt = document.createElement('option');
+                var opt = doc.createElement('option');
                 opt.value = stocks[i];
                 opt.textContent = stocks[i];
                 if(stocks[i] === current) opt.selected = true;
                 sel.appendChild(opt);
             }}
             sel.addEventListener('change', function(){{
-                var params = new URLSearchParams(window.location.search);
+                var params = new URLSearchParams(window.parent.location.search);
                 params.set('stock', this.value);
-                window.location.search = params.toString();
+                window.parent.location.search = params.toString();
             }});
             wrapper.appendChild(lbl);
             wrapper.appendChild(sel);
-            document.body.appendChild(wrapper);
+            doc.body.appendChild(wrapper);
             // 侧边栏展开时自动调整 right 位置
             function syncRight(){{
-                var sb = document.querySelector('[data-testid="stSidebar"]');
+                var sb = doc.querySelector('[data-testid="stSidebar"]');
                 if(sb){{
                     var w = sb.getBoundingClientRect().width;
                     wrapper.style.right = (w > 50 ? (w - 280 + 20) : 20) + 'px';
@@ -952,10 +953,10 @@ if choice == "🏠 股票详情中心":
             setTimeout(syncRight, 800);
             setTimeout(syncRight, 2000);
             var mob = new MutationObserver(function(){{ setTimeout(syncRight, 150); }});
-            mob.observe(document.body, {{childList:true, subtree:true}});
+            mob.observe(doc.body, {{childList:true, subtree:true}});
             setTimeout(function(){{ mob.disconnect(); }}, 30000);
         }})();
-        </script>""", unsafe_allow_html=True)
+        </script>""", height=1)
 
     # ── 自动更新全部现价（每次加载页面时执行） ──
     if _YF_OK and all_stocks:
