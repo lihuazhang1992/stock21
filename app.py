@@ -179,16 +179,6 @@ def sync_db_to_github():
         st.toast("⚠️ 同步跳过：TOKEN 或 REPO_URL 未配置", icon="⚠️")
         return
     try:
-        # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件
-        try:
-            # 用独立连接做 checkpoint，避免干扰缓存的主连接
-            tmp_conn = sqlite3.connect(str(DB_FILE), check_same_thread=False)
-            tmp_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            tmp_conn.commit()
-            tmp_conn.close()
-        except Exception as e:
-            print(f"[sync] checkpoint warning: {e}")
-
         owner, repo = _parse_github_repo_info(REPO_URL)
         db_name = DB_FILE.name
         db_bytes = DB_FILE.read_bytes()
@@ -243,7 +233,10 @@ st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon
 def get_connection():
     db_path = str(DB_FILE)
     _conn = sqlite3.connect(db_path, check_same_thread=False)
-    _conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，避免锁冲突
+    # 不使用 WAL 模式，用默认的 DELETE journal
+    # 原因：WAL 模式下数据先写 WAL 文件再 checkpoint 到主 db，
+    # 但 checkpoint 在 Streamlit Cloud 上不可靠，导致 sync 上传的 db 文件缺少最新数据
+    # DELETE 模式下 commit() 直接写入主 db 文件，sync 读到的就是完整数据
     return _conn
 
 # ── 首次启动时从 GitHub 拉取最新数据库（rerun 时不重复下载）──
@@ -260,6 +253,11 @@ if "db_loaded" not in st.session_state:
             db_b64 = data.get("content", "")
             if db_b64:
                 DB_FILE.write_bytes(base64.b64decode(db_b64))
+                # 清理可能残留的 WAL/SHM 文件（之前使用 WAL 模式产生的）
+                for ext in [".wal", ".shm"]:
+                    wal_file = DB_FILE.parent / (DB_FILE.name + ext)
+                    if wal_file.exists():
+                        wal_file.unlink()
                 print(f"[init] Downloaded db from GitHub ({len(base64.b64decode(db_b64))} bytes)")
     except urllib.error.HTTPError as e:
         if e.code == 404:
