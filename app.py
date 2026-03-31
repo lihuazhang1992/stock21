@@ -157,7 +157,11 @@ except Exception:
     TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
     REPO_URL = st.secrets.get("REPO_URL", "")
 
-def sync_db_to_github():
+_sync_lock = threading.Lock()       # 防止多个同步线程并发
+_sync_generation = 0                # 代数计数器，用于取消过期的同步请求
+
+def _do_sync():
+    """实际的同步逻辑"""
     if not (TOKEN and REPO_URL):
         return
     try:
@@ -165,9 +169,10 @@ def sync_db_to_github():
         repo_dir = base_dir / ".git_repo"
         db_name = DB_FILE.name
         auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        # WAL 模式下先 checkpoint，确保所有数据写入主库文件再复制
+        # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件再复制
         try:
             _c = get_connection()
+            _c.commit()
             _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception:
             pass
@@ -191,6 +196,22 @@ def sync_db_to_github():
         print(f"GitHub备份严重错误: {e}")
         if not os.environ.get("STREAMLIT_CLOUD"):
             st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
+
+def sync_db_to_github():
+    """延迟 3 秒同步，合并短时间内的多次操作。必须先 conn.commit() 再调用。"""
+    global _sync_generation
+    my_gen = _sync_generation + 1
+    _sync_generation = my_gen
+    def _delayed_sync():
+        import time
+        time.sleep(3)  # 等待 3 秒，合并可能的连续操作
+        # 只在代数仍匹配时执行（如果有更新的请求则跳过）
+        if _sync_generation != my_gen:
+            return
+        with _sync_lock:
+            if _sync_generation == my_gen:
+                _do_sync()
+    threading.Thread(target=_delayed_sync, daemon=True).start()
 # ==========================================
 
 st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon="📈")
@@ -270,8 +291,8 @@ for _name, _code in TICKER_MAP.items():
         pass
 conn.commit()
 
-thread = threading.Thread(target=sync_db_to_github, daemon=True)
-thread.start()
+# 注意：启动时不再自动同步到 GitHub，避免用旧数据覆盖远程
+# 同步只在用户修改数据后触发，确保推送的是最新数据
 
 def get_dynamic_stock_list():
     try:
