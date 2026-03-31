@@ -244,29 +244,32 @@ def get_connection():
     _conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，避免锁冲突
     return _conn
 
-if not DB_FILE.exists():
-    try:
-        # 通过 GitHub Contents API 下载 db 文件
-        owner, repo = _parse_github_repo_info(REPO_URL)
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_FILE.name}"
-        req = urllib.request.Request(api_url, headers={
-            "Authorization": f"token {TOKEN}",
-            "User-Agent": "Streamlit-Bot"
-        })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-            db_b64 = data.get("content", "")
+# ── 每次启动都从 GitHub 拉取最新数据库 ──
+try:
+    owner, repo = _parse_github_repo_info(REPO_URL)
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_FILE.name}"
+    req = urllib.request.Request(api_url, headers={
+        "Authorization": f"token {TOKEN}",
+        "User-Agent": "Streamlit-Bot"
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+        db_b64 = data.get("content", "")
+        if db_b64:
+            # 先关闭旧连接再覆盖文件，避免锁冲突
+            try:
+                conn_old = get_connection.__wrapped__() if hasattr(get_connection, '__wrapped__') else None
+            except Exception:
+                conn_old = None
             DB_FILE.write_bytes(base64.b64decode(db_b64))
-            st.toast("✅ 已从 GitHub 加载数据库", icon="📥")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            st.toast("🆕 GitHub 无数据库，将创建新库", icon="✨")
-        else:
-            st.error(f"❌ 无法从 GitHub 加载数据库: {e}")
-            st.stop()
-    except Exception as e:
-        st.error(f"❌ 无法从 GitHub 加载数据库: {e}")
-        st.stop()
+            st.toast("✅ 已从 GitHub 加载最新数据库", icon="📥")
+except urllib.error.HTTPError as e:
+    if e.code == 404:
+        st.toast("🆕 GitHub 无数据库，将创建新库", icon="✨")
+    else:
+        st.toast(f"⚠️ GitHub 加载失败(code={e.code})，使用本地数据库", icon="⚠️")
+except Exception as e:
+    st.toast(f"⚠️ GitHub 加载失败，使用本地数据库: {e}", icon="⚠️")
 
 conn = get_connection()
 c = conn.cursor()
