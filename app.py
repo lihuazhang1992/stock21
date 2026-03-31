@@ -179,37 +179,22 @@ def sync_db_to_github():
         st.toast("⚠️ 同步跳过：TOKEN 或 REPO_URL 未配置", icon="⚠️")
         return
     try:
-        # === 关键诊断：验证 db 文件内容是否包含最新数据 ===
-        # 用独立连接打开 db 文件，查询最近修改的数据
-        try:
-            _diag_conn = sqlite3.connect(str(DB_FILE))
-            _diag_rows = _diag_conn.execute(
-                "SELECT count(*) FROM trades"
-            ).fetchone()
-            _diag_prices = _diag_conn.execute(
-                "SELECT count(*) FROM prices"
-            ).fetchone()
-            _diag_strategy = _diag_conn.execute(
-                "SELECT count(*) FROM strategy_notes"
-            ).fetchone()
-            _diag_journal = _diag_conn.execute(
-                "SELECT count(*) FROM journal"
-            ).fetchone()
-            print(f"[sync-diag] trades={_diag_rows[0]}, prices={_diag_prices[0]}, "
-                  f"strategy={_diag_strategy[0]}, journal={_diag_journal[0]}")
-            # 打印最近5条交易记录，验证是否包含最新修改
-            _recent = _diag_conn.execute(
-                "SELECT id, date, code, action, price FROM trades ORDER BY id DESC LIMIT 5"
-            ).fetchall()
-            print(f"[sync-diag] recent trades: {_recent}")
-            _diag_conn.close()
-        except Exception as e:
-            print(f"[sync-diag] ERROR: {e}")
+        # ★ 关键修复：不再读取 DB_FILE 文件，而是通过 SQLite API 直接 dump 数据到临时文件
+        # 原因：即使去掉 WAL 模式，Streamlit Cloud 的文件 I/O 可能有缓存/缓冲问题，
+        # 导致 read_bytes() 读到的不是 commit 后的最新内容
+        # 改用 .backup() API 可以保证拿到内存中连接的完整数据
+        _tmp_path = DB_FILE.parent / f"_sync_tmp_{datetime.now().strftime('%H%M%S')}.db"
+        _src_conn = get_connection()
+        _src_conn.commit()
+        _bak_conn = sqlite3.connect(str(_tmp_path))
+        _src_conn.backup(_bak_conn)
+        _bak_conn.close()
+        db_bytes = _tmp_path.read_bytes()
+        _tmp_path.unlink()  # 删除临时文件
+        print(f"[sync] backup db size: {len(db_bytes)} bytes")
 
         owner, repo = _parse_github_repo_info(REPO_URL)
         db_name = DB_FILE.name
-        db_bytes = DB_FILE.read_bytes()
-        print(f"[sync] db size: {len(db_bytes)} bytes, owner={owner}, repo={repo}")
         b64_content = base64.b64encode(db_bytes).decode()
 
         # 先尝试获取文件当前 SHA（用于更新；文件不存在则创建）
@@ -285,18 +270,6 @@ if "db_loaded" not in st.session_state:
                     wal_file = DB_FILE.parent / (DB_FILE.name + ext)
                     if wal_file.exists():
                         wal_file.unlink()
-                # 诊断：验证下载到的 db 内容
-                try:
-                    _d = sqlite3.connect(str(DB_FILE))
-                    _d_trades = _d.execute("SELECT count(*) FROM trades").fetchone()[0]
-                    _d_prices = _d.execute("SELECT count(*) FROM prices").fetchone()[0]
-                    _d_journal = _d.execute("SELECT count(*) FROM journal").fetchone()[0]
-                    _d_recent = _d.execute("SELECT id, date, code, action, price FROM trades ORDER BY id DESC LIMIT 3").fetchall()
-                    print(f"[init-diag] downloaded db: trades={_d_trades}, prices={_d_prices}, journal={_d_journal}")
-                    print(f"[init-diag] recent trades: {_d_recent}")
-                    _d.close()
-                except Exception as _de:
-                    print(f"[init-diag] ERROR: {_de}")
                 print(f"[init] Downloaded db from GitHub ({len(base64.b64decode(db_b64))} bytes)")
     except urllib.error.HTTPError as e:
         if e.code == 404:
