@@ -158,7 +158,6 @@ except Exception:
     REPO_URL = st.secrets.get("REPO_URL", "")
 
 _sync_lock = threading.Lock()       # 防止多个同步线程并发
-_sync_generation = 0                # 代数计数器，用于取消过期的同步请求
 
 def _do_sync():
     """实际的同步逻辑"""
@@ -198,20 +197,15 @@ def _do_sync():
             st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
 
 def sync_db_to_github():
-    """延迟 3 秒同步，合并短时间内的多次操作。必须先 conn.commit() 再调用。"""
-    global _sync_generation
-    my_gen = _sync_generation + 1
-    _sync_generation = my_gen
-    def _delayed_sync():
-        import time
-        time.sleep(3)  # 等待 3 秒，合并可能的连续操作
-        # 只在代数仍匹配时执行（如果有更新的请求则跳过）
-        if _sync_generation != my_gen:
-            return
-        with _sync_lock:
-            if _sync_generation == my_gen:
-                _do_sync()
-    threading.Thread(target=_delayed_sync, daemon=True).start()
+    """后台同步到 GitHub。如果已有同步在进行则跳过。必须先 conn.commit() 再调用。"""
+    if not _sync_lock.acquire(blocking=False):
+        return  # 已有同步在进行，跳过
+    def _run():
+        try:
+            _do_sync()
+        finally:
+            _sync_lock.release()
+    threading.Thread(target=_run, daemon=True).start()
 # ==========================================
 
 st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon="📈")
