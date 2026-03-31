@@ -157,6 +157,9 @@ except Exception:
     TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
     REPO_URL = st.secrets.get("REPO_URL", "")
 
+# 启动时诊断：检查 TOKEN 和 REPO_URL 是否正确加载
+print(f"[init] TOKEN={'YES' if TOKEN else 'NO'}, REPO_URL={REPO_URL[:30] if REPO_URL else 'EMPTY'}")
+
 def _parse_github_repo_info(repo_url):
     """从 repo URL 解析 owner 和 repo 名"""
     # 支持 https://github.com/owner/repo.git 或 https://github.com/owner/repo
@@ -167,6 +170,7 @@ def _parse_github_repo_info(repo_url):
 def sync_db_to_github():
     """通过 GitHub Contents API 直接上传 db 文件，无需 clone/push。必须先 conn.commit() 再调用。"""
     if not (TOKEN and REPO_URL):
+        st.toast("⚠️ 同步跳过：TOKEN 或 REPO_URL 未配置", icon="⚠️")
         return
     try:
         # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件
@@ -180,6 +184,7 @@ def sync_db_to_github():
         owner, repo = _parse_github_repo_info(REPO_URL)
         db_name = DB_FILE.name
         db_bytes = DB_FILE.read_bytes()
+        print(f"[sync] db size: {len(db_bytes)} bytes, owner={owner}, repo={repo}")
         b64_content = base64.b64encode(db_bytes).decode()
 
         # 先尝试获取文件当前 SHA（用于更新；文件不存在则创建）
@@ -193,9 +198,11 @@ def sync_db_to_github():
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
                 sha = data.get("sha")
+                print(f"[sync] got SHA: {sha}")
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise  # 404 表示文件不存在（首次上传），其他错误抛出
+            print(f"[sync] file not found on GitHub (404), will create")
 
         # 上传（创建或更新）
         payload = json.dumps({
@@ -215,9 +222,10 @@ def sync_db_to_github():
         with urllib.request.urlopen(put_req, timeout=15) as resp:
             result = json.loads(resp.read().decode())
             if result.get("commit"):
+                print(f"[sync] SUCCESS: {result['commit'].get('sha', '')}")
                 st.toast("✅ GitHub 同步成功", icon="📤")
     except Exception as e:
-        print(f"GitHub备份严重错误: {e}")
+        print(f"[sync] ERROR: {e}")
         st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
 # ==========================================
 
@@ -1072,6 +1080,7 @@ if choice == "🏠 股票详情中心":
                     c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?,?,?)",
                               (_name, _price, _mc))
             conn.commit()
+            sync_db_to_github()
 
     latest_prices_data = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()}
     latest_prices = {k: v[0] for k, v in latest_prices_data.items()}
@@ -1226,6 +1235,7 @@ if choice == "🏠 股票详情中心":
                     """, (selected_stock, new_logic, max_occupied_amount, new_annual,
                           new_buy_base, new_buy_drop, new_sell_base, new_sell_rise))
                     conn.commit()
+                    sync_db_to_github()
                     st.success("✅ 已保存")
                     st.rerun()
 
@@ -1246,6 +1256,7 @@ if choice == "🏠 股票详情中心":
                             "ALTER TABLE price_targets_v2 ADD COLUMN sell_fallback_pct REAL DEFAULT 0.0"]:
                     try: c.execute(col_sql)
                     except: pass
+                sync_db_to_github()
                 conn.commit()
 
             ensure_price_target_v2_table_inline()
@@ -1404,6 +1415,7 @@ if choice == "🏠 股票详情中心":
                 c.execute("INSERT INTO decision_history (code, date, decision, reason) VALUES (?,?,?,?)",
                           (selected_stock, d_date.strftime('%Y-%m-%d'), d_content, d_reason))
                 conn.commit()
+                sync_db_to_github()
                 st.rerun()
 
         # textarea 自动增高 JS（直接注入主文档，不经过 iframe）
@@ -1453,6 +1465,7 @@ if choice == "🏠 股票详情中心":
                 if del_col.button("✕", key=f"del_dec_{row['id']}", help="删除"):
                     c.execute("DELETE FROM decision_history WHERE id = ?", (row['id'],))
                     conn.commit()
+                    sync_db_to_github()
                     st.rerun()
 
         st.divider()
