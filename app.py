@@ -1,4 +1,3 @@
-from git import Repo
 import os, shutil, streamlit as st_git
 import pathlib
 import streamlit as st
@@ -147,6 +146,7 @@ def fetch_latest_prices(stock_names: list) -> dict:
 
 
 # ============== 自动备份 GitHub ==============
+import base64, json, urllib.request
 DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
 try:
     from dotenv import load_dotenv
@@ -157,55 +157,68 @@ except Exception:
     TOKEN    = st.secrets.get("GITHUB_TOKEN", "")
     REPO_URL = st.secrets.get("REPO_URL", "")
 
-_sync_lock = threading.Lock()       # 防止多个同步线程并发
+def _parse_github_repo_info(repo_url):
+    """从 repo URL 解析 owner 和 repo 名"""
+    # 支持 https://github.com/owner/repo.git 或 https://github.com/owner/repo
+    clean = repo_url.rstrip("/").replace(".git", "")
+    parts = clean.rstrip("/").split("/")
+    return parts[-2], parts[-1]
 
-def _do_sync():
-    """实际的同步逻辑"""
+def sync_db_to_github():
+    """通过 GitHub Contents API 直接上传 db 文件，无需 clone/push。必须先 conn.commit() 再调用。"""
     if not (TOKEN and REPO_URL):
         return
     try:
-        base_dir = pathlib.Path(__file__).parent
-        repo_dir = base_dir / ".git_repo"
-        db_name = DB_FILE.name
-        auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件再复制
+        # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件
         try:
             _c = get_connection()
             _c.commit()
             _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception:
             pass
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir)
-        repo = Repo.clone_from(auth_url, repo_dir, depth=1)
-        with repo.config_writer() as cw:
-            cw.set_value("user", "name", "Streamlit_Bot")
-            cw.set_value("user", "email", "bot@example.com")
-        shutil.copy2(base_dir / db_name, repo_dir / db_name)
-        if repo.is_dirty(untracked_files=True):
-            repo.git.add(all=True)
-            repo.index.commit(f"Auto-sync {datetime.now().strftime('%m%d-%H%M')}")
-            origin = repo.remote(name='origin')
-            origin.push(force=True)
-            if not os.environ.get("STREAMLIT_CLOUD"):
+
+        owner, repo = _parse_github_repo_info(REPO_URL)
+        db_name = DB_FILE.name
+        db_bytes = DB_FILE.read_bytes()
+        b64_content = base64.b64encode(db_bytes).decode()
+
+        # 先尝试获取文件当前 SHA（用于更新；文件不存在则创建）
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{db_name}"
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"token {TOKEN}",
+            "User-Agent": "Streamlit-Bot"
+        })
+        sha = None
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                sha = data.get("sha")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise  # 404 表示文件不存在（首次上传），其他错误抛出
+
+        # 上传（创建或更新）
+        payload = json.dumps({
+            "message": f"Auto-sync {datetime.now().strftime('%m%d-%H%M')}",
+            "content": b64_content,
+        }).encode()
+        if sha:
+            payload_dict = json.loads(payload)
+            payload_dict["sha"] = sha
+            payload = json.dumps(payload_dict).encode()
+
+        put_req = urllib.request.Request(api_url, data=payload, method="PUT", headers={
+            "Authorization": f"token {TOKEN}",
+            "User-Agent": "Streamlit-Bot",
+            "Content-Type": "application/json"
+        })
+        with urllib.request.urlopen(put_req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+            if result.get("commit"):
                 st.toast("✅ GitHub 同步成功", icon="📤")
-        else:
-            print("数据无变动，无需同步")
     except Exception as e:
         print(f"GitHub备份严重错误: {e}")
-        if not os.environ.get("STREAMLIT_CLOUD"):
-            st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
-
-def sync_db_to_github():
-    """后台同步到 GitHub。如果已有同步在进行则跳过。必须先 conn.commit() 再调用。"""
-    if not _sync_lock.acquire(blocking=False):
-        return  # 已有同步在进行，跳过
-    def _run():
-        try:
-            _do_sync()
-        finally:
-            _sync_lock.release()
-    threading.Thread(target=_run, daemon=True).start()
+        st.toast(f"⚠️ 备份失败: {e}", icon="⚠️")
 # ==========================================
 
 st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon="📈")
@@ -219,17 +232,24 @@ def get_connection():
 
 if not DB_FILE.exists():
     try:
-        repo_dir = pathlib.Path(__file__).with_name(".git_repo")
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir)
-        auth_url = REPO_URL.replace("https://", f"https://x-access-token:{TOKEN}@")
-        Repo.clone_from(auth_url, repo_dir, depth=1)
-        remote_db = repo_dir / DB_FILE.name
-        if remote_db.exists():
-            shutil.copy2(remote_db, DB_FILE)
+        # 通过 GitHub Contents API 下载 db 文件
+        owner, repo = _parse_github_repo_info(REPO_URL)
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_FILE.name}"
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"token {TOKEN}",
+            "User-Agent": "Streamlit-Bot"
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            db_b64 = data.get("content", "")
+            DB_FILE.write_bytes(base64.b64decode(db_b64))
             st.toast("✅ 已从 GitHub 加载数据库", icon="📥")
-        else:
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
             st.toast("🆕 GitHub 无数据库，将创建新库", icon="✨")
+        else:
+            st.error(f"❌ 无法从 GitHub 加载数据库: {e}")
+            st.stop()
     except Exception as e:
         st.error(f"❌ 无法从 GitHub 加载数据库: {e}")
         st.stop()
@@ -1314,7 +1334,7 @@ if choice == "🏠 股票详情中心":
                              ni_slp, ni_srp, ni_sbs, ni_shb, ni_sfb or 0.0,
                              datetime.now().strftime('%Y-%m-%d %H:%M')))
                         conn.commit()
-                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        sync_db_to_github()
                         st.success("✅ 已保存")
                         st.rerun()
 
@@ -1575,7 +1595,7 @@ if choice == "🏠 股票详情中心":
                     c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
                               (datetime.now().strftime('%Y-%m-%d'), selected_stock, new_journal_content.strip()))
                     conn.commit()
-                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    sync_db_to_github()
                     st.success("✅ 已存档")
                     st.rerun()
                 else:
@@ -1605,7 +1625,7 @@ if choice == "🏠 股票详情中心":
                         if st.button("✕", key=f"jdel_{jrow['id']}", help="删除"):
                             c.execute("DELETE FROM journal WHERE id = ?", (jrow['id'],))
                             conn.commit()
-                            threading.Thread(target=sync_db_to_github, daemon=True).start()
+                            sync_db_to_github()
                             st.rerun()
 
     else:
@@ -1644,7 +1664,7 @@ elif choice == "📊 实时持仓":
                             # 直接更新 session_state 为新价格，让 rerun 后输入框显示最新值
                             st.session_state[f"p_{_name}"] = _price
                         conn.commit()
-                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        sync_db_to_github()
                         _detail = "  |  ".join([f"{k} → {v}" for k, v in _fetched.items()])
                         _tip_col.success(f"✅ 已更新 {len(_fetched)} 只：{_detail}")
                         _no_map = [s for s in stocks if s not in TICKER_MAP]
@@ -1670,7 +1690,7 @@ elif choice == "📊 实时持仓":
                     c.execute("INSERT OR REPLACE INTO prices (code, current_price, manual_cost) VALUES (?, ?, ?)",
                               (stock, new_p, new_c))
                     conn.commit()
-                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    sync_db_to_github()
 
         final_raw     = c.execute("SELECT code, current_price, manual_cost FROM prices").fetchall()
         latest_config = {row[0]: (row[1] or 0.0, row[2] or 0.0) for row in final_raw}
@@ -1967,7 +1987,7 @@ elif choice == "🎯 价格目标管理":
              data.get('sell_high_after_break'), data.get('sell_fallback_pct'),
              datetime.now().strftime('%Y-%m-%d %H:%M')))
         conn.commit()
-        threading.Thread(target=sync_db_to_github, daemon=True).start()
+        sync_db_to_github()
 
     def load_price_target_v2(code):
         row = c.execute('SELECT * FROM price_targets_v2 WHERE code = ?', (code,)).fetchone()
@@ -1986,7 +2006,7 @@ elif choice == "🎯 价格目标管理":
     def delete_price_target_v2(code):
         c.execute('DELETE FROM price_targets_v2 WHERE code = ?', (code,))
         conn.commit()
-        threading.Thread(target=sync_db_to_github, daemon=True).start()
+        sync_db_to_github()
 
     def calc_buy_target(config, current_price):
         r = {'base_price': None, 'buy_target': None, 'rebound_pct': None, 'to_target_pct': None}
@@ -2321,7 +2341,7 @@ elif choice == "📝 交易录入":
                     except Exception:
                         pass
                 conn.commit()
-                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                sync_db_to_github()
                 st.success(f"✅ 已保存：{final_code} {a} {q}股 @ {p}")
                 st.rerun()
 
@@ -2362,7 +2382,7 @@ elif choice == "🔔 买卖信号":
                     (s_code, s_high, s_low, s_up, s_down,
                      h_date.strftime('%Y-%m-%d'), l_date.strftime('%Y-%m-%d')))
                 conn.commit()
-                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                sync_db_to_github()
                 st.success("✅ 监控已更新")
                 st.rerun()
 
@@ -2401,7 +2421,7 @@ elif choice == "🔔 买卖信号":
         if st.button("🗑️ 清空所有监控", type="secondary"):
             c.execute("DELETE FROM signals")
             conn.commit()
-            threading.Thread(target=sync_db_to_github, daemon=True).start()
+            sync_db_to_github()
             st.rerun()
     else:
         st.info("📌 当前没有设置任何监控信号")
@@ -2441,7 +2461,7 @@ elif choice == "📜 历史明细":
                         (q_date.strftime('%Y-%m-%d'), q_code, q_act, q_price, int(q_qty), q_note.strip() or None)
                     )
                     conn.commit()
-                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    sync_db_to_github()
                     st.success(f"✅ 已录入：{q_code} {q_act} {q_price:.3f} × {int(q_qty)}")
                     st.rerun()
 
@@ -2566,7 +2586,7 @@ elif choice == "📜 历史明细":
                         save_df['date'] = pd.to_datetime(save_df['date']).dt.strftime('%Y-%m-%d')
                         save_df.to_sql('trades', conn, if_exists='replace', index=False)
                         conn.commit()
-                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        sync_db_to_github()
                         st.success("✅ 交易记录已更新")
                         st.rerun()
                     except Exception as e:
@@ -2593,7 +2613,7 @@ elif choice == "📓 复盘日记":
                 c.execute("INSERT INTO journal (date, stock_name, content) VALUES (?,?,?)",
                           (datetime.now().strftime('%Y-%m-%d'), ds, content.strip()))
                 conn.commit()
-                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                sync_db_to_github()
                 st.success("✅ 已存档")
                 st.rerun()
             else:
@@ -2633,7 +2653,7 @@ elif choice == "📓 复盘日记":
                         if st.session_state.get(f"confirm_{row['id']}", False):
                             c.execute("DELETE FROM journal WHERE id = ?", (row['id'],))
                             conn.commit()
-                            threading.Thread(target=sync_db_to_github, daemon=True).start()
+                            sync_db_to_github()
                             st.rerun()
                         else:
                             st.session_state[f"confirm_{row['id']}"] = True
@@ -2683,7 +2703,7 @@ elif choice == "📝 交易录入":
                 c.execute("INSERT INTO stock_info (stock_name, stock_code) VALUES (?, ?)",
                           (new_stock_name.strip(), new_stock_code.strip()))
                 conn.commit()
-                threading.Thread(target=sync_db_to_github, daemon=True).start()
+                sync_db_to_github()
                 st.success(f"✅ 已添加：{new_stock_name} ({new_stock_code})")
                 st.rerun()
             except sqlite3.IntegrityError:
@@ -2749,7 +2769,7 @@ elif choice == "📝 交易录入":
                         c.execute("DELETE FROM price_targets WHERE code = ?", (stock_name,))
                         c.execute("DELETE FROM signals WHERE code = ?", (stock_name,))
                         conn.commit()
-                        threading.Thread(target=sync_db_to_github, daemon=True).start()
+                        sync_db_to_github()
                         st.success(f"✅ 已删除：{stock_name}")
                         st.query_params.clear()
                         st.rerun()
@@ -2784,7 +2804,7 @@ elif choice == "📝 交易录入":
                         (trade_date.strftime('%Y-%m-%d'), trade_stock, trade_action, trade_price, int(trade_qty), trade_note.strip())
                     )
                     conn.commit()
-                    threading.Thread(target=sync_db_to_github, daemon=True).start()
+                    sync_db_to_github()
                     st.success(f"✅ 交易已录入：{trade_stock} {trade_action} {trade_qty}股 @ {trade_price}")
                     st.rerun()
                 except Exception as e:
