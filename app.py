@@ -147,7 +147,13 @@ def fetch_latest_prices(stock_names: list) -> dict:
 
 # ============== 自动备份 GitHub ==============
 import base64, json, urllib.request
-DB_FILE = pathlib.Path(__file__).with_name("stock_data_v12.db")
+# Streamlit Cloud 只有 /mnt/data 是可持久化目录，本地运行时回退到脚本目录
+_DATA_DIR = pathlib.Path(os.environ.get("STREAMLIT_DATA_DIR", "/mnt/data"))
+if not _DATA_DIR.exists():
+    _DATA_DIR = pathlib.Path(__file__).parent
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_FILE = _DATA_DIR / "stock_data_v12.db"
+print(f"[init] DB_FILE={DB_FILE}, data_dir={_DATA_DIR}")
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -233,7 +239,7 @@ st.set_page_config(page_title="股票管理系统 Pro", layout="wide", page_icon
 
 @st.cache_resource
 def get_connection():
-    db_path = str(pathlib.Path(__file__).with_name("stock_data_v12.db"))
+    db_path = str(DB_FILE)
     _conn = sqlite3.connect(db_path, check_same_thread=False)
     _conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，避免锁冲突
     return _conn
