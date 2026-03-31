@@ -181,11 +181,13 @@ def sync_db_to_github():
     try:
         # WAL 模式下先 commit + checkpoint，确保所有数据写入主库文件
         try:
-            _c = get_connection()
-            _c.commit()
-            _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:
-            pass
+            # 用独立连接做 checkpoint，避免干扰缓存的主连接
+            tmp_conn = sqlite3.connect(str(DB_FILE), check_same_thread=False)
+            tmp_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            tmp_conn.commit()
+            tmp_conn.close()
+        except Exception as e:
+            print(f"[sync] checkpoint warning: {e}")
 
         owner, repo = _parse_github_repo_info(REPO_URL)
         db_name = DB_FILE.name
@@ -244,32 +246,29 @@ def get_connection():
     _conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，避免锁冲突
     return _conn
 
-# ── 每次启动都从 GitHub 拉取最新数据库 ──
-try:
-    owner, repo = _parse_github_repo_info(REPO_URL)
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_FILE.name}"
-    req = urllib.request.Request(api_url, headers={
-        "Authorization": f"token {TOKEN}",
-        "User-Agent": "Streamlit-Bot"
-    })
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode())
-        db_b64 = data.get("content", "")
-        if db_b64:
-            # 先关闭旧连接再覆盖文件，避免锁冲突
-            try:
-                conn_old = get_connection.__wrapped__() if hasattr(get_connection, '__wrapped__') else None
-            except Exception:
-                conn_old = None
-            DB_FILE.write_bytes(base64.b64decode(db_b64))
-            st.toast("✅ 已从 GitHub 加载最新数据库", icon="📥")
-except urllib.error.HTTPError as e:
-    if e.code == 404:
-        st.toast("🆕 GitHub 无数据库，将创建新库", icon="✨")
-    else:
-        st.toast(f"⚠️ GitHub 加载失败(code={e.code})，使用本地数据库", icon="⚠️")
-except Exception as e:
-    st.toast(f"⚠️ GitHub 加载失败，使用本地数据库: {e}", icon="⚠️")
+# ── 首次启动时从 GitHub 拉取最新数据库（rerun 时不重复下载）──
+if "db_loaded" not in st.session_state:
+    try:
+        owner, repo = _parse_github_repo_info(REPO_URL)
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_FILE.name}"
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"token {TOKEN}",
+            "User-Agent": "Streamlit-Bot"
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            db_b64 = data.get("content", "")
+            if db_b64:
+                DB_FILE.write_bytes(base64.b64decode(db_b64))
+                print(f"[init] Downloaded db from GitHub ({len(base64.b64decode(db_b64))} bytes)")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("[init] GitHub db not found (404), will create new")
+        else:
+            print(f"[init] GitHub download failed: HTTP {e.code}")
+    except Exception as e:
+        print(f"[init] GitHub download failed: {e}")
+    st.session_state.db_loaded = True
 
 conn = get_connection()
 c = conn.cursor()
